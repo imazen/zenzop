@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.82.0"
 description = "A faster fork of the Zopfli DEFLATE compressor. Drop-in replacement with identical output."
+repository = "https://github.com/imazen/zenzop"
 readme = "README.md"
 license = "Apache-2.0"
 keywords = ["compression", "deflate", "zopfli"]
@@ -27,7 +28,7 @@ name = "zenzop"
 required-features = ["gzip", "std", "zlib"]
 
 [dependencies]
-enough = { version = "0.3", default-features = false }
+enough = { version = "0.4", default-features = false }
 crc32fast = { version = "1.5.0", default-features = false, optional = true }
 log = { version = "0.4.28", optional = true }
 rayon = { version = "1.10", optional = true }
