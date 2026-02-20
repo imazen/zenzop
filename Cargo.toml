@@ -1,6 +1,6 @@
 [package]
 name = "zenzop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82.0"
 description = "A faster fork of the Zopfli DEFLATE compressor. Drop-in replacement with identical output."
@@ -39,6 +39,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 miniz_oxide = "0.8.9"
 proptest = "1.7.0"
 proptest-derive = "0.7.0"
+zopfli = "0.8"
 
 [[bench]]
 name = "compress"

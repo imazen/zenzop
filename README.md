@@ -19,7 +19,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zenzop = "0.1"
+zenzop = "0.2"
 ```
 
 ### Compress data
@@ -62,13 +62,19 @@ fn main() -> io::Result<()> {
 ### With cancellation
 
 ```rust
-use zenzop::{Options, Format, compress_with_stop, Unstoppable};
+use std::io::{self, Write};
 
-// Zero-cost when not needed:
-let result = compress_with_stop(Options::default(), Format::Gzip, &data[..], &mut out, Unstoppable);
-
-// With a real stop token (from the `almost-enough` crate):
-// let result = compress_with_stop(Options::default(), Format::Gzip, &data[..], &mut out, stop);
+fn compress_cancellable(data: &[u8], stop: impl zenzop::Stop) -> io::Result<Vec<u8>> {
+    let mut encoder = zenzop::GzipEncoder::with_stop_buffered(
+        zenzop::Options::default(),
+        zenzop::BlockType::Dynamic,
+        Vec::new(),
+        stop,
+    )?;
+    encoder.write_all(data)?;
+    let compressed = encoder.into_inner()?.finish()?;
+    Ok(compressed)
+}
 ```
 
 ## Cargo features
@@ -108,7 +114,7 @@ Apache-2.0
 
 ## Origin
 
-Forked from [zopfli-rs/zopfli](https://github.com/zopfli-rs/zopfli), which was Carol Nichols' Rust reimplementation of Google's Zopfli.
+Forked from [zopfli-rs/zopfli](https://github.com/zopfli-rs/zopfli), which was Carol Nichols' Rust reimplementation of Google's Zopfli. Some optimization ideas borrowed from [ECT](https://github.com/fhanau/Efficient-Compression-Tool) (Efficient Compression Tool).
 
 ## AI-Generated Code Notice
 

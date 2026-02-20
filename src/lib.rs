@@ -173,55 +173,29 @@ pub enum Format {
 pub fn compress<R: std::io::Read, W: Write>(
     options: Options,
     output_format: Format,
-    in_data: R,
-    out: W,
-) -> Result<(), Error> {
-    compress_with_stop(options, output_format, in_data, out, Unstoppable)
-}
-
-/// Like [`compress`], but with cooperative cancellation support.
-///
-/// The `stop` token is checked at each squeeze iteration boundary. If the token
-/// signals cancellation, compression is aborted and an I/O error is returned.
-#[cfg(feature = "std")]
-pub fn compress_with_stop<R: std::io::Read, W: Write>(
-    options: Options,
-    output_format: Format,
     mut in_data: R,
     out: W,
-    stop: impl Stop,
 ) -> Result<(), Error> {
     match output_format {
         #[cfg(feature = "gzip")]
         Format::Gzip => {
-            let mut encoder =
-                GzipEncoder::with_stop_buffered(options, BlockType::Dynamic, out, stop)?;
+            let mut encoder = GzipEncoder::new_buffered(options, BlockType::Dynamic, out)?;
             std::io::copy(&mut in_data, &mut encoder)?;
             encoder.into_inner()?.finish().map(|_| ())
         }
         #[cfg(feature = "zlib")]
         Format::Zlib => {
-            let mut encoder =
-                ZlibEncoder::with_stop_buffered(options, BlockType::Dynamic, out, stop)?;
+            let mut encoder = ZlibEncoder::new_buffered(options, BlockType::Dynamic, out)?;
             std::io::copy(&mut in_data, &mut encoder)?;
             encoder.into_inner()?.finish().map(|_| ())
         }
         Format::Deflate => {
-            let mut encoder =
-                DeflateEncoder::with_stop_buffered(options, BlockType::Dynamic, out, stop);
+            let mut encoder = DeflateEncoder::new_buffered(options, BlockType::Dynamic, out);
             std::io::copy(&mut in_data, &mut encoder)?;
             encoder.into_inner()?.finish().map(|_| ())
         }
     }
 }
-
-#[doc(hidden)]
-#[deprecated(
-    since = "0.8.2",
-    note = "Object pools are no longer used. This function is now a no-op and will be removed in version 0.9.0."
-)]
-#[cfg(feature = "std")] // TODO remove for 0.9.0
-pub fn prewarm_object_pools() {}
 
 #[cfg(all(test, feature = "std"))]
 mod test {
