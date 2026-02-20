@@ -147,10 +147,13 @@ impl ZopfliHash {
     }
 
     pub fn prev_at(&self, index: usize, which: Which) -> usize {
+        // Mask ensures the returned value is always < ZOPFLI_WINDOW_SIZE,
+        // letting LLVM eliminate downstream bounds checks on same[]/prev[]/hashval[].
         (match which {
             Which::Hash1 => self.hash1.prev[index],
             Which::Hash2 => self.hash2.prev[index],
         }) as usize
+            & ZOPFLI_WINDOW_MASK
     }
 
     pub fn hash_val_at(&self, index: usize, which: Which) -> i32 {
