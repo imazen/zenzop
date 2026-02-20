@@ -245,12 +245,13 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     costmodel: F,
     h: &mut ZopfliHash,
     costs: &mut Vec<f32>,
-) -> (f64, Vec<u16>) {
+) -> (f64, Vec<u16>, Vec<u16>) {
     // Best cost to get here so far.
     let blocksize = inend - instart;
-    let mut length_array = vec![0; blocksize + 1];
+    let mut length_array = vec![0u16; blocksize + 1];
+    let mut dist_array = vec![0u16; blocksize + 1];
     if instart == inend {
-        return (0.0, length_array);
+        return (0.0, length_array, dist_array);
     }
     let windowstart = instart.saturating_sub(ZOPFLI_WINDOW_SIZE);
 
@@ -291,6 +292,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
             for _ in 0..ZOPFLI_MAX_MATCH {
                 costs[j + ZOPFLI_MAX_MATCH] = costs[j] + symbolcost as f32;
                 length_array[j + ZOPFLI_MAX_MATCH] = ZOPFLI_MAX_MATCH as u16;
+                dist_array[j + ZOPFLI_MAX_MATCH] = 1;
                 i += 1;
                 j += 1;
                 h.update(arr, i);
@@ -316,6 +318,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
             if new_cost < f64::from(costs[j + 1]) {
                 costs[j + 1] = new_cost as f32;
                 length_array[j + 1] = 1;
+                dist_array[j + 1] = 0;
             }
         }
         // Lengths.
@@ -335,20 +338,20 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
                 debug_assert!(k <= ZOPFLI_MAX_MATCH);
                 costs[j + k] = new_cost as f32;
                 length_array[j + k] = k as u16;
+                dist_array[j + k] = sublength;
             }
         }
         i += 1;
     }
 
     debug_assert!(costs[blocksize] >= 0.0);
-    (f64::from(costs[blocksize]), length_array)
+    (f64::from(costs[blocksize]), length_array, dist_array)
 }
 
 /// Calculates the optimal path of lz77 lengths to use, from the calculated
-/// `length_array`. The `length_array` must contain the optimal length to reach that
-/// byte. The path will be filled with the lengths to use, so its data size will be
-/// the amount of lz77 symbols.
-fn trace(size: usize, length_array: &[u16]) -> Vec<u16> {
+/// `length_array` and `dist_array`. Returns (length, dist) pairs in reverse order
+/// (from end to start).
+fn trace(size: usize, length_array: &[u16], dist_array: &[u16]) -> Vec<(u16, u16)> {
     let mut index = size;
     if size == 0 {
         return vec![];
@@ -357,8 +360,9 @@ fn trace(size: usize, length_array: &[u16]) -> Vec<u16> {
 
     while index > 0 {
         let lai = length_array[index];
+        let dai = dist_array[index];
         let laiu = lai as usize;
-        path.push(lai);
+        path.push((lai, dai));
         debug_assert!(laiu <= index);
         debug_assert!(laiu <= ZOPFLI_MAX_MATCH);
         debug_assert_ne!(lai, 0);
@@ -390,9 +394,10 @@ fn lz77_optimal_run<F: Fn(usize, u16) -> f64, C: Cache>(
     h: &mut ZopfliHash,
     costs: &mut Vec<f32>,
 ) {
-    let (cost, length_array) = get_best_lengths(lmc, in_data, instart, inend, costmodel, h, costs);
-    let path = trace(inend - instart, &length_array);
-    store.follow_path(in_data, instart, inend, path, lmc);
+    let (cost, length_array, dist_array) =
+        get_best_lengths(lmc, in_data, instart, inend, costmodel, h, costs);
+    let path = trace(inend - instart, &length_array, &dist_array);
+    store.store_from_path(in_data, instart, path);
     debug_assert!(cost < f64::INFINITY);
 }
 

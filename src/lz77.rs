@@ -225,65 +225,18 @@ impl Lz77Store {
         }
     }
 
-    pub fn follow_path<C: Cache>(
-        &mut self,
-        in_data: &[u8],
-        instart: usize,
-        inend: usize,
-        path: Vec<u16>,
-        lmc: &mut C,
-    ) {
-        let windowstart = instart.saturating_sub(ZOPFLI_WINDOW_SIZE);
-
-        if instart == inend {
-            return;
-        }
-
-        let mut h = ZopfliHash::new();
-
-        let arr = &in_data[..inend];
-        h.warmup(arr, windowstart, inend);
-
-        for i in windowstart..instart {
-            h.update(arr, i);
-        }
-
+    /// Builds the LZ77 store from precomputed (length, dist) pairs.
+    /// The path is in reverse order (from end to start of block).
+    /// This avoids the expensive hash chain re-walk that `follow_path` requires.
+    pub fn store_from_path(&mut self, in_data: &[u8], instart: usize, path: Vec<(u16, u16)>) {
         let mut pos = instart;
-        for item in path.into_iter().rev() {
-            let mut length = item;
-            debug_assert!(pos < inend);
-
-            h.update(arr, pos);
-
-            // Add to output.
+        for &(length, dist) in path.iter().rev() {
             if length >= ZOPFLI_MIN_MATCH as u16 {
-                // Get the distance by recalculating longest match. The found length
-                // should match the length from the path.
-                let longest_match = find_longest_match(
-                    lmc,
-                    &h,
-                    arr,
-                    pos,
-                    inend,
-                    instart,
-                    length as usize,
-                    &mut None,
-                );
-                let dist = longest_match.distance;
-                let dummy_length = longest_match.length;
-                debug_assert!(!(dummy_length != length && length > 2 && dummy_length > 2));
-                verify_len_dist(arr, pos, dist, length);
+                verify_len_dist(in_data, pos, dist, length);
                 self.lit_len_dist(length, dist, pos);
             } else {
-                length = 1;
-                self.lit_len_dist(u16::from(arr[pos]), 0, pos);
+                self.lit_len_dist(u16::from(in_data[pos]), 0, pos);
             }
-
-            debug_assert!(pos + (length as usize) <= inend);
-            for j in 1..(length as usize) {
-                h.update(arr, pos + j);
-            }
-
             pos += length as usize;
         }
     }
