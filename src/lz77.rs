@@ -35,13 +35,13 @@ impl LitLen {
 pub struct Lz77Store {
     pub litlens: Vec<LitLen>,
 
-    pub pos: Vec<usize>,
+    pub pos: Vec<u32>,
 
     ll_symbol: Vec<u16>,
     d_symbol: Vec<u16>,
 
-    ll_counts: Vec<usize>,
-    d_counts: Vec<usize>,
+    ll_counts: Vec<u32>,
+    d_counts: Vec<u32>,
 }
 
 impl Lz77Store {
@@ -60,15 +60,17 @@ impl Lz77Store {
     }
 
     /// Creates a new `Lz77Store` with pre-allocated capacity based on block size.
-    /// This avoids repeated Vec growth during `append_store_item`.
+    /// Uses blocksize/2 as the initial estimate since LZ77 matches consume multiple
+    /// input bytes per entry. Vecs will grow if needed.
     pub fn with_capacity(blocksize: usize) -> Self {
-        let ll_counts_cap = (blocksize / ZOPFLI_NUM_LL + 1) * ZOPFLI_NUM_LL;
-        let d_counts_cap = (blocksize / ZOPFLI_NUM_D + 1) * ZOPFLI_NUM_D;
+        let cap = blocksize / 2;
+        let ll_counts_cap = (cap / ZOPFLI_NUM_LL + 1) * ZOPFLI_NUM_LL;
+        let d_counts_cap = (cap / ZOPFLI_NUM_D + 1) * ZOPFLI_NUM_D;
         Self {
-            litlens: Vec::with_capacity(blocksize),
-            pos: Vec::with_capacity(blocksize),
-            ll_symbol: Vec::with_capacity(blocksize),
-            d_symbol: Vec::with_capacity(blocksize),
+            litlens: Vec::with_capacity(cap),
+            pos: Vec::with_capacity(cap),
+            ll_symbol: Vec::with_capacity(cap),
+            d_symbol: Vec::with_capacity(cap),
             ll_counts: Vec::with_capacity(ll_counts_cap),
             d_counts: Vec::with_capacity(d_counts_cap),
         }
@@ -112,7 +114,7 @@ impl Lz77Store {
             }
         }
 
-        self.pos.push(pos);
+        self.pos.push(pos as u32);
 
         // Why isn't this at the beginning of this function?
         // assert(length < 259);
@@ -266,13 +268,19 @@ impl Lz77Store {
         let llpos = ZOPFLI_NUM_LL * (lpos / ZOPFLI_NUM_LL);
         let dpos = ZOPFLI_NUM_D * (lpos / ZOPFLI_NUM_D);
 
-        ll.copy_from_slice(&self.ll_counts[llpos..llpos + ZOPFLI_NUM_LL]);
+        let ll_src = &self.ll_counts[llpos..llpos + ZOPFLI_NUM_LL];
+        for (dst, &src) in ll.iter_mut().zip(ll_src.iter()) {
+            *dst = src as usize;
+        }
         let end = cmp::min(llpos + ZOPFLI_NUM_LL, self.size());
         for i in (lpos + 1)..end {
             ll[self.ll_symbol[i] as usize] -= 1;
         }
 
-        d.copy_from_slice(&self.d_counts[dpos..dpos + ZOPFLI_NUM_D]);
+        let d_src = &self.d_counts[dpos..dpos + ZOPFLI_NUM_D];
+        for (dst, &src) in d.iter_mut().zip(d_src.iter()) {
+            *dst = src as usize;
+        }
         let end = cmp::min(dpos + ZOPFLI_NUM_D, self.size());
         for i in (lpos + 1)..end {
             if let LitLen::LengthDist(_, _) = self.litlens[i] {
@@ -330,7 +338,7 @@ impl Lz77Store {
         }
 
         let l = lend - 1;
-        self.pos[l] + self.litlens[l].size() - self.pos[lstart]
+        self.pos[l] as usize + self.litlens[l].size() - self.pos[lstart] as usize
     }
 }
 

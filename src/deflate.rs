@@ -909,7 +909,11 @@ fn add_lz77_block<W: Write>(
 ) -> Result<(), Error> {
     if btype == BlockType::Uncompressed {
         let length = lz77.get_byte_range(lstart, lend);
-        let pos = if lstart == lend { 0 } else { lz77.pos[lstart] };
+        let pos = if lstart == lend {
+            0
+        } else {
+            lz77.pos[lstart] as usize
+        };
         let end = pos + length;
         return add_non_compressed_block(final_block, in_data, pos, end, bitwise_writer);
     }
@@ -1166,7 +1170,7 @@ fn add_lz77_block_auto_type<W: Write>(
     }
     if expensivefixed {
         /* Recalculate the LZ77 with lz77_optimal_fixed */
-        let instart = lz77.pos[lstart];
+        let instart = lz77.pos[lstart] as usize;
         let inend = instart + lz77.get_byte_range(lstart, lend);
 
         fixedstore = Lz77Store::with_capacity(inend - instart);
@@ -1313,48 +1317,65 @@ fn blocksplit_attempt<W: Write>(
     }
     ranges.push((last, inend));
 
-    let compress_range = |&(start, end): &(usize, usize)| {
-        lz77_optimal(
-            &mut ZopfliLongestMatchCache::new(end - start),
-            in_data,
-            start,
-            end,
-            options.iteration_count.get(),
-            options.iterations_without_improvement.get(),
-            stop,
-        )
-    };
-
-    // Compress all blocks (in parallel when the `parallel` feature is enabled).
-    #[cfg(feature = "parallel")]
-    let stores: Vec<Lz77Store> = {
-        use rayon::prelude::*;
-        ranges
-            .par_iter()
-            .map(compress_range)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(stop_to_error)?
-    };
-    #[cfg(not(feature = "parallel"))]
-    let stores: Vec<Lz77Store> = ranges
-        .iter()
-        .map(compress_range)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(stop_to_error)?;
-
     let mut scratch = HuffmanScratch::new();
 
-    // Concatenate stores and build splitpoints.
-    for (i, store) in stores.iter().enumerate() {
-        totalcost +=
-            calculate_block_size_auto_type_with_scratch(store, 0, store.size(), &mut scratch);
-        debug_assert!(instart == inend || store.size() > 0);
-        for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
-            lz77.append_store_item(litlens, pos);
+    // Parallel: compress all blocks, then concatenate.
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        let stores: Vec<Lz77Store> = ranges
+            .par_iter()
+            .map(|&(start, end)| {
+                lz77_optimal(
+                    &mut ZopfliLongestMatchCache::new(end - start),
+                    in_data,
+                    start,
+                    end,
+                    options.iteration_count.get(),
+                    options.iterations_without_improvement.get(),
+                    stop,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(stop_to_error)?;
+        for (i, store) in stores.iter().enumerate() {
+            totalcost +=
+                calculate_block_size_auto_type_with_scratch(store, 0, store.size(), &mut scratch);
+            debug_assert!(instart == inend || store.size() > 0);
+            for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
+                lz77.append_store_item(litlens, pos as usize);
+            }
+            if i < stores.len() - 1 {
+                splitpoints.push(lz77.size());
+            }
         }
-        // Every block except the last contributes a splitpoint.
-        if i < stores.len() - 1 {
-            splitpoints.push(lz77.size());
+    }
+
+    // Sequential: compress-then-drop keeps peak memory = 1 cache at a time.
+    #[cfg(not(feature = "parallel"))]
+    {
+        let nranges = ranges.len();
+        for (i, &(start, end)) in ranges.iter().enumerate() {
+            let store = lz77_optimal(
+                &mut ZopfliLongestMatchCache::new(end - start),
+                in_data,
+                start,
+                end,
+                options.iteration_count.get(),
+                options.iterations_without_improvement.get(),
+                stop,
+            )
+            .map_err(stop_to_error)?;
+            totalcost +=
+                calculate_block_size_auto_type_with_scratch(&store, 0, store.size(), &mut scratch);
+            debug_assert!(instart == inend || store.size() > 0);
+            for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
+                lz77.append_store_item(litlens, pos as usize);
+            }
+            if i < nranges - 1 {
+                splitpoints.push(lz77.size());
+            }
+            // store + cache dropped here — frees ~42MB per 1MB block
         }
     }
 
