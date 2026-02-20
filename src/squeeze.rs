@@ -68,8 +68,7 @@ impl CostModel {
         let mut ll_length = [0.0f32; ZOPFLI_MAX_MATCH + 1];
         for (i, cost) in ll_length.iter_mut().enumerate().skip(3) {
             let lsym = get_length_symbol(i);
-            *cost =
-                (stats.ll_symbols[lsym] + f64::from(get_length_symbol_extra_bits(lsym))) as f32;
+            *cost = (stats.ll_symbols[lsym] + f64::from(get_length_symbol_extra_bits(lsym))) as f32;
         }
 
         let mut d_cost = [0.0f32; ZOPFLI_NUM_D];
@@ -275,6 +274,7 @@ fn get_cost_model_min_cost<F: Fn(usize, u16) -> f64>(costmodel: F) -> f64 {
 /// `length_array`: output array of size `(inend - instart)` which will receive the best
 ///     length to reach this byte from a previous byte.
 /// returns the cost that was, according to the `costmodel`, needed to get to the end.
+#[allow(clippy::too_many_arguments)]
 fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     lmc: &mut C,
     in_data: &[u8],
@@ -283,13 +283,18 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     costmodel: F,
     h: &mut ZopfliHash,
     costs: &mut Vec<f32>,
-) -> (f64, Vec<u16>, Vec<u16>) {
+    length_array: &mut Vec<u16>,
+    dist_array: &mut Vec<u16>,
+    sublen: &mut Vec<u16>,
+) -> f64 {
     // Best cost to get here so far.
     let blocksize = inend - instart;
-    let mut length_array = vec![0u16; blocksize + 1];
-    let mut dist_array = vec![0u16; blocksize + 1];
+    length_array.clear();
+    length_array.resize(blocksize + 1, 0);
+    dist_array.clear();
+    dist_array.resize(blocksize + 1, 0);
     if instart == inend {
-        return (0.0, length_array, dist_array);
+        return 0.0;
     }
     let windowstart = instart.saturating_sub(ZOPFLI_WINDOW_SIZE);
 
@@ -309,7 +314,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     let mut i = instart;
     let mut leng;
     let mut longest_match;
-    let mut sublen = vec![0; ZOPFLI_MAX_MATCH + 1];
+    sublen.resize(ZOPFLI_MAX_MATCH + 1, 0);
     let mincost = get_cost_model_min_cost(&costmodel);
     while i < inend {
         let mut j = i - instart; // Index in the costs array and length_array.
@@ -345,7 +350,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
             inend,
             instart,
             ZOPFLI_MAX_MATCH,
-            &mut Some(&mut sublen),
+            &mut Some(sublen.as_mut_slice()),
         );
         leng = longest_match.length;
 
@@ -383,7 +388,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     }
 
     debug_assert!(costs[blocksize] >= 0.0);
-    (f64::from(costs[blocksize]), length_array, dist_array)
+    f64::from(costs[blocksize])
 }
 
 /// Calculates the optimal path of lz77 lengths to use, from the calculated
@@ -431,10 +436,23 @@ fn lz77_optimal_run<F: Fn(usize, u16) -> f64, C: Cache>(
     store: &mut Lz77Store,
     h: &mut ZopfliHash,
     costs: &mut Vec<f32>,
+    length_array: &mut Vec<u16>,
+    dist_array: &mut Vec<u16>,
+    sublen: &mut Vec<u16>,
 ) {
-    let (cost, length_array, dist_array) =
-        get_best_lengths(lmc, in_data, instart, inend, costmodel, h, costs);
-    let path = trace(inend - instart, &length_array, &dist_array);
+    let cost = get_best_lengths(
+        lmc,
+        in_data,
+        instart,
+        inend,
+        costmodel,
+        h,
+        costs,
+        length_array,
+        dist_array,
+        sublen,
+    );
+    let path = trace(inend - instart, length_array, dist_array);
     store.store_from_path(in_data, instart, path);
     debug_assert!(cost < f64::INFINITY);
 }
@@ -455,6 +473,9 @@ pub fn lz77_optimal_fixed<C: Cache>(
     store: &mut Lz77Store,
 ) {
     let mut costs = Vec::with_capacity(inend - instart);
+    let mut length_array = Vec::new();
+    let mut dist_array = Vec::new();
+    let mut sublen = Vec::new();
     lz77_optimal_run(
         lmc,
         in_data,
@@ -464,6 +485,9 @@ pub fn lz77_optimal_fixed<C: Cache>(
         store,
         &mut ZopfliHash::new(),
         &mut costs,
+        &mut length_array,
+        &mut dist_array,
+        &mut sublen,
     );
 }
 
@@ -489,6 +513,9 @@ pub fn lz77_optimal<C: Cache>(
 
     let mut h = ZopfliHash::new();
     let mut costs = Vec::with_capacity(inend - instart + 1);
+    let mut length_array = Vec::new();
+    let mut dist_array = Vec::new();
+    let mut sublen = Vec::new();
 
     let mut beststats = SymbolStats::default();
 
@@ -516,6 +543,9 @@ pub fn lz77_optimal<C: Cache>(
             &mut currentstore,
             &mut h,
             &mut costs,
+            &mut length_array,
+            &mut dist_array,
+            &mut sublen,
         );
         let cost = calculate_block_size(&currentstore, 0, currentstore.size(), BlockType::Dynamic);
 
