@@ -1,39 +1,115 @@
-<div align="center">
-<img src="https://avatars.githubusercontent.com/u/100982154?s=200&v=4" alt="Zopfli in Rust logo">
-<h1>Zopfli in Rust</h1>
+# zenzop
 
-<a href="https://crates.io/crates/zopfli"><img alt="crates.io latest version" src="https://img.shields.io/crates/v/zopfli"></a>
-<a href="https://docs.rs/zopfli"><img alt="docs.rs status" src="https://img.shields.io/docsrs/zopfli?label=docs.rs"></a>
-</div>
+A faster fork of the [Zopfli](https://github.com/google/zopfli) DEFLATE compressor, written in Rust.
 
-This is a reimplementation of the [Zopfli](https://github.com/google/zopfli) compression tool in Rust.
+Zopfli produces the smallest possible DEFLATE output at the cost of speed. zenzop produces byte-identical output 2-3x faster through algorithmic improvements: precomputed lookup tables, arena-free Huffman tree construction, pre-allocated stores, and eliminated bounds checks in hot paths.
 
-Carol Nichols started the Rust implementation as an experiment in incrementally rewriting a C library in Rust, keeping the project compiling at every step. For more information about that experiment, see [the slides for a talk she gave about it](https://github.com/carols10cents/rust-out-your-c-talk) and [the repo as it was for the experiment](https://github.com/carols10cents/zopfli).
+## Features
 
-The minimum supported Rust version (MSRV) for this crate is 1.82. Bumping this version is not considered a breaking change for semantic versioning purposes. We will try to do it only when we estimate that such a bump would not cause widespread inconvenience or breakage.
+- **Byte-identical output** to the C Zopfli reference implementation
+- **2-3x faster** than the original Rust port
+- **`no_std` + `alloc`** compatible — works on embedded and WASM targets
+- **Cooperative cancellation** via [`enough::Stop`](https://docs.rs/enough) — cancel long-running compressions cleanly
+- **Streaming encoder API** — `DeflateEncoder`, `GzipEncoder`, `ZlibEncoder`
+- **Parallel block compression** with optional `rayon` support
 
-## How to build
+## Usage
 
-To build the code, run:
+Add to your `Cargo.toml`:
 
-```
-$ cargo build --release
-```
-
-and the executable will be in `target/release/zopfli`.
-
-This should work on stable or beta Rust.
-
-## Running the tests
-
-There are some unit tests, mostly around the boundary package merge algorithm implementation in katajainen.rs, and a property-based test for compression reversibility. These tests can be run with:
-
-```
-$ cargo test
+```toml
+[dependencies]
+zenzop = "0.1"
 ```
 
-Golden master tests, to check that compressed files are exactly the same as the C implementation would generate, can be run using:
+### Compress data
+
+```rust
+use std::io;
+
+fn main() -> io::Result<()> {
+    let data = b"Hello, world!";
+    let mut output = Vec::new();
+
+    zenzop::compress(
+        zenzop::Options::default(),
+        zenzop::Format::Gzip,
+        &data[..],
+        &mut output,
+    )?;
+
+    Ok(())
+}
+```
+
+### Streaming encoder
+
+```rust
+use std::io::{self, Write};
+
+fn main() -> io::Result<()> {
+    let mut encoder = zenzop::DeflateEncoder::new_buffered(
+        zenzop::Options::default(),
+        zenzop::BlockType::Dynamic,
+        Vec::new(),
+    );
+    encoder.write_all(b"Hello, world!")?;
+    let compressed = encoder.into_inner()?.finish()?;
+    Ok(())
+}
+```
+
+### With cancellation
+
+```rust
+use zenzop::{Options, Format, compress_with_stop, Unstoppable};
+
+// Zero-cost when not needed:
+let result = compress_with_stop(Options::default(), Format::Gzip, &data[..], &mut out, Unstoppable);
+
+// With a real stop token (from the `almost-enough` crate):
+// let result = compress_with_stop(Options::default(), Format::Gzip, &data[..], &mut out, stop);
+```
+
+## Cargo features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `gzip` | yes | Gzip format support |
+| `zlib` | yes | Zlib format support |
+| `std` | yes | Standard library (logging, `std::io` traits) |
+| `parallel` | no | Parallel block compression via rayon |
+| `nightly` | no | Nightly-only optimizations |
+
+For `no_std` usage: `default-features = false`.
+
+## MSRV
+
+The minimum supported Rust version is **1.82**. Bumping this is not considered a breaking change.
+
+## Building from source
 
 ```
-$ ./test/run.sh
+cargo build --release
 ```
+
+The `zenzop` binary will be at `target/release/zenzop`.
+
+## Testing
+
+```
+cargo test                    # Unit tests + property-based tests
+./test/run.sh                 # Golden master: byte-identical to C Zopfli
+```
+
+## License
+
+Apache-2.0
+
+## Origin
+
+Forked from [zopfli-rs/zopfli](https://github.com/zopfli-rs/zopfli), which was Carol Nichols' Rust reimplementation of Google's Zopfli.
+
+## AI-Generated Code Notice
+
+Developed with Claude (Anthropic). Not all code manually reviewed. Review critical paths before production use.
