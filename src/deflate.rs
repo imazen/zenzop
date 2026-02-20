@@ -1206,43 +1206,46 @@ fn blocksplit_attempt<W: Write>(
     let npoints = splitpoints_uncompressed.len();
     let mut splitpoints = Vec::with_capacity(npoints);
 
+    // Build all block ranges: one per split point boundary, plus the final segment.
+    let mut ranges = Vec::with_capacity(npoints + 1);
     let mut last = instart;
     for &item in &splitpoints_uncompressed {
-        let store = lz77_optimal(
-            &mut ZopfliLongestMatchCache::new(item - last),
+        ranges.push((last, item));
+        last = item;
+    }
+    ranges.push((last, inend));
+
+    let compress_range = |&(start, end): &(usize, usize)| {
+        lz77_optimal(
+            &mut ZopfliLongestMatchCache::new(end - start),
             in_data,
-            last,
-            item,
+            start,
+            end,
             options.iteration_count.get(),
             options.iterations_without_improvement.get(),
-        );
-        totalcost += calculate_block_size_auto_type(&store, 0, store.size());
+        )
+    };
 
-        // ZopfliAppendLZ77Store(&store, &lz77);
+    // Compress all blocks (in parallel when the `parallel` feature is enabled).
+    #[cfg(feature = "parallel")]
+    let stores: Vec<Lz77Store> = {
+        use rayon::prelude::*;
+        ranges.par_iter().map(compress_range).collect()
+    };
+    #[cfg(not(feature = "parallel"))]
+    let stores: Vec<Lz77Store> = ranges.iter().map(compress_range).collect();
+
+    // Concatenate stores and build splitpoints.
+    for (i, store) in stores.iter().enumerate() {
+        totalcost += calculate_block_size_auto_type(store, 0, store.size());
         debug_assert!(instart == inend || store.size() > 0);
         for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
             lz77.append_store_item(litlens, pos);
         }
-
-        splitpoints.push(lz77.size());
-
-        last = item;
-    }
-
-    let store = lz77_optimal(
-        &mut ZopfliLongestMatchCache::new(inend - last),
-        in_data,
-        last,
-        inend,
-        options.iteration_count.get(),
-        options.iterations_without_improvement.get(),
-    );
-    totalcost += calculate_block_size_auto_type(&store, 0, store.size());
-
-    // ZopfliAppendLZ77Store(&store, &lz77);
-    debug_assert!(instart == inend || store.size() > 0);
-    for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
-        lz77.append_store_item(litlens, pos);
+        // Every block except the last contributes a splitpoint.
+        if i < stores.len() - 1 {
+            splitpoints.push(lz77.size());
+        }
     }
 
     /* Second block splitting attempt */

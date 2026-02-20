@@ -30,6 +30,7 @@ required-features = ["gzip", "std", "zlib"]
 bumpalo = "3.19.0"
 crc32fast = { version = "1.5.0", default-features = false, optional = true }
 log = { version = "0.4.28", optional = true }
+rayon = { version = "1.10", optional = true }
 simd-adler32 = { version = "0.3.7", default-features = false, optional = true }
 
 [dev-dependencies]
@@ -46,6 +47,7 @@ harness = false
 default = ["gzip", "std", "zlib"]
 gzip = ["dep:crc32fast"]
 nightly = ["crc32fast?/nightly"]
+parallel = ["dep:rayon", "std"]
 std = ["crc32fast?/std", "dep:log", "simd-adler32?/std"]
 zlib = ["dep:simd-adler32"]
 
