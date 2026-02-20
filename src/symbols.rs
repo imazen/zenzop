@@ -41,14 +41,27 @@ pub const fn get_dist_extra_bits_value(dist: u16) -> u16 {
 }
 
 pub const fn get_dist_symbol(dist: u16) -> u16 {
-    if dist < 5 {
-        // dist should never equal zero, and wrapping generates more efficient code
-        return dist.wrapping_sub(1);
-    }
-    let l = (dist - 1).ilog2();
-    let r = ((dist - 1) >> (l - 1)) & 1;
-    l as u16 * 2 + r
+    DIST_SYMBOL_TABLE[dist as usize] as u16
 }
+
+const fn build_dist_symbol_table() -> [u8; 32769] {
+    let mut table = [0u8; 32769];
+    let mut i: u32 = 1;
+    while i <= 32768 {
+        let dist = i as u16;
+        table[i as usize] = if dist < 5 {
+            dist.wrapping_sub(1) as u8
+        } else {
+            let l = (dist - 1).ilog2();
+            let r = (((dist - 1) >> (l - 1)) & 1) as u32;
+            (l * 2 + r) as u8
+        };
+        i += 1;
+    }
+    table
+}
+
+static DIST_SYMBOL_TABLE: [u8; 32769] = build_dist_symbol_table();
 
 const LENGTH_EXTRA_BITS: [u32; 288 /* Originally, 259 entries */] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,

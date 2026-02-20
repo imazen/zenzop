@@ -111,10 +111,11 @@ impl Lz77Store {
             }
             LitLen::LengthDist(length, dist) => {
                 let len_sym = get_length_symbol(length as usize);
+                let dist_sym = get_dist_symbol(dist);
                 self.ll_symbol.push(len_sym as u16);
-                self.d_symbol.push(get_dist_symbol(dist));
+                self.d_symbol.push(dist_sym);
                 self.ll_counts[llstart + len_sym] += 1;
-                self.d_counts[dstart + get_dist_symbol(dist) as usize] += 1;
+                self.d_counts[dstart + dist_sym as usize] += 1;
             }
         }
     }
