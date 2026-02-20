@@ -54,12 +54,12 @@ fn main() -> io::Result<()> {
         Vec::new(),
     );
     encoder.write_all(b"Hello, world!")?;
-    let compressed = encoder.into_inner()?.finish()?;
+    let compressed = encoder.into_inner()?.finish()?.into_inner();
     Ok(())
 }
 ```
 
-### With cancellation
+### With cancellation / timeout
 
 ```rust
 use std::io::{self, Write};
@@ -72,8 +72,11 @@ fn compress_cancellable(data: &[u8], stop: impl zenzop::Stop) -> io::Result<Vec<
         stop,
     )?;
     encoder.write_all(data)?;
-    let compressed = encoder.into_inner()?.finish()?;
-    Ok(compressed)
+    let result = encoder.into_inner()?.finish()?;
+    if !result.fully_optimized() {
+        eprintln!("compression was cut short by timeout");
+    }
+    Ok(result.into_inner())
 }
 ```
 

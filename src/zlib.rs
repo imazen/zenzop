@@ -1,6 +1,6 @@
 use enough::Stop;
 
-use crate::{BlockType, DeflateEncoder, Error, Options, Write};
+use crate::{BlockType, CompressResult, DeflateEncoder, Error, Options, Write};
 
 /// A Zlib encoder powered by the Zopfli algorithm, that compresses data using
 /// a [`DeflateEncoder`]. Most users will find using [`compress`](crate::compress)
@@ -96,20 +96,22 @@ impl<W: Write, S: Stop> ZlibEncoder<W, S> {
     /// The encoder is automatically [`finish`](Self::finish)ed when
     /// dropped, but explicitly finishing it with this method allows
     /// handling I/O errors.
-    pub fn finish(mut self) -> Result<W, Error> {
+    pub fn finish(mut self) -> Result<CompressResult<W>, Error> {
         self.__finish().map(|sink| sink.unwrap())
     }
 
-    fn __finish(&mut self) -> Result<Option<W>, Error> {
+    fn __finish(&mut self) -> Result<Option<CompressResult<W>>, Error> {
         if self.deflate_encoder.is_none() {
             return Ok(None);
         }
 
-        let mut sink = self.deflate_encoder.take().unwrap().finish()?;
+        let mut result = self.deflate_encoder.take().unwrap().finish()?;
 
-        sink.write_all(&self.adler_hasher.finish().to_be_bytes())?;
+        result
+            .inner
+            .write_all(&self.adler_hasher.finish().to_be_bytes())?;
 
-        Ok(Some(sink))
+        Ok(Some(result))
     }
 
     /// Gets a reference to the underlying writer.

@@ -504,7 +504,7 @@ pub fn lz77_optimal<C: Cache>(
     max_iterations: u64,
     max_iterations_without_improvement: u64,
     stop: &dyn Stop,
-) -> Result<Lz77Store, StopReason> {
+) -> Result<(Lz77Store, bool), StopReason> {
     /* Dist to get to here with smallest cost. */
     let blocksize = inend - instart;
     let mut currentstore = Lz77Store::with_capacity(blocksize);
@@ -515,6 +515,12 @@ pub fn lz77_optimal<C: Cache>(
     let mut stats = SymbolStats::default();
     stats.get_statistics(&currentstore);
 
+    // Seed outputstore with the greedy result so that even zero completed
+    // squeeze iterations returns valid output on budget exhaustion.
+    outputstore.clone_from(&currentstore);
+    let mut bestcost =
+        calculate_block_size(&currentstore, 0, currentstore.size(), BlockType::Dynamic);
+
     let mut h = ZopfliHash::new();
     let mut costs = Vec::with_capacity(inend - instart + 1);
     let mut length_array = Vec::new();
@@ -523,11 +529,12 @@ pub fn lz77_optimal<C: Cache>(
 
     let mut beststats = SymbolStats::default();
 
-    let mut bestcost = f64::INFINITY;
     let mut lastcost = 0.0;
     /* Try randomizing the costs a bit once the size stabilizes. */
     let mut ran_state = RanState::new();
     let mut lastrandomstep = u64::MAX;
+
+    let mut fully_optimized = true;
 
     /* Do regular deflate, then loop multiple shortest path runs, each time using
     the statistics of the previous run. */
@@ -536,7 +543,14 @@ pub fn lz77_optimal<C: Cache>(
     let mut current_iteration: u64 = 0;
     let mut iterations_without_improvement: u64 = 0;
     loop {
-        stop.check()?;
+        match stop.check() {
+            Ok(()) => {}
+            Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+            Err(_) => {
+                fully_optimized = false;
+                break;
+            }
+        }
         currentstore.reset();
         let cost_model = CostModel::from_stats(&stats);
         lz77_optimal_run(
@@ -591,5 +605,5 @@ pub fn lz77_optimal<C: Cache>(
         }
         lastcost = cost;
     }
-    Ok(outputstore)
+    Ok((outputstore, fully_optimized))
 }

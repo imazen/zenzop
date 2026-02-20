@@ -24,6 +24,30 @@ use crate::{
     Error, Options, Write,
 };
 
+/// The result of a compression operation.
+///
+/// Wraps the inner writer and indicates whether compression
+/// ran to completion or was cut short by a budget/timeout.
+#[derive(Debug)]
+pub struct CompressResult<W> {
+    pub(crate) inner: W,
+    fully_optimized: bool,
+}
+
+impl<W> CompressResult<W> {
+    /// Returns `true` if compression completed all squeeze iterations.
+    /// Returns `false` if a stop signal caused early termination with
+    /// the best result found so far.
+    pub fn fully_optimized(&self) -> bool {
+        self.fully_optimized
+    }
+
+    /// Unwraps the inner writer.
+    pub fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
 /// A DEFLATE encoder powered by the Zopfli algorithm that compresses data written
 /// to it to the specified sink. Most users will find using [`compress`](crate::compress)
 /// easier and more performant.
@@ -44,6 +68,7 @@ pub struct DeflateEncoder<W: Write, S: Stop = enough::Unstoppable> {
     window_and_chunk: Vec<u8>,
     bitwise_writer: Option<BitwiseWriter<W>>,
     stop: S,
+    fully_optimized: bool,
 }
 
 impl<W: Write> DeflateEncoder<W> {
@@ -58,6 +83,7 @@ impl<W: Write> DeflateEncoder<W> {
             window_and_chunk: Vec::with_capacity(ZOPFLI_WINDOW_SIZE),
             bitwise_writer: Some(BitwiseWriter::new(sink)),
             stop: enough::Unstoppable,
+            fully_optimized: true,
         }
     }
 
@@ -88,6 +114,7 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
             window_and_chunk: Vec::with_capacity(ZOPFLI_WINDOW_SIZE),
             bitwise_writer: Some(BitwiseWriter::new(sink)),
             stop,
+            fully_optimized: true,
         }
     }
 
@@ -114,8 +141,11 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
     /// The encoder is automatically [`finish`](Self::finish)ed when
     /// dropped, but explicitly finishing it with this method allows
     /// handling I/O errors.
-    pub fn finish(mut self) -> Result<W, Error> {
-        self.__finish().map(|sink| sink.unwrap())
+    pub fn finish(mut self) -> Result<CompressResult<W>, Error> {
+        self.__finish().map(|sink| CompressResult {
+            inner: sink.unwrap(),
+            fully_optimized: self.fully_optimized,
+        })
     }
 
     /// Compresses the chunk stored at `window_and_chunk`. This includes
@@ -123,7 +153,7 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
     /// available.
     #[inline]
     fn compress_chunk(&mut self, is_last: bool) -> Result<(), Error> {
-        deflate_part(
+        let fo = deflate_part(
             &self.options,
             self.btype,
             is_last,
@@ -132,7 +162,9 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
             self.window_and_chunk.len(),
             self.bitwise_writer.as_mut().unwrap(),
             &self.stop,
-        )
+        )?;
+        self.fully_optimized &= fo;
+        Ok(())
     }
 
     /// Sets the next chunk that will be compressed by the next
@@ -245,13 +277,14 @@ fn deflate_part<W: Write>(
     inend: usize,
     bitwise_writer: &mut BitwiseWriter<W>,
     stop: &dyn Stop,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     /* If btype=Dynamic is specified, it tries all block types. If a lesser btype is
     given, then however it forces that one. Neither of the lesser types needs
     block splitting as they have no dynamic huffman trees. */
     match btype {
         BlockType::Uncompressed => {
-            add_non_compressed_block(final_block, in_data, instart, inend, bitwise_writer)
+            add_non_compressed_block(final_block, in_data, instart, inend, bitwise_writer)?;
+            Ok(true)
         }
         BlockType::Fixed => {
             let mut store = Lz77Store::with_capacity(inend - instart);
@@ -272,7 +305,8 @@ fn deflate_part<W: Write>(
                 store.size(),
                 0,
                 bitwise_writer,
-            )
+            )?;
+            Ok(true)
         }
         BlockType::Dynamic => blocksplit_attempt(
             options,
@@ -1291,7 +1325,7 @@ fn blocksplit_attempt<W: Write>(
     inend: usize,
     bitwise_writer: &mut BitwiseWriter<W>,
     stop: &dyn Stop,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let mut totalcost = 0.0;
     let mut lz77 = Lz77Store::with_capacity(inend - instart);
 
@@ -1318,12 +1352,13 @@ fn blocksplit_attempt<W: Write>(
     ranges.push((last, inend));
 
     let mut scratch = HuffmanScratch::new();
+    let mut fully_optimized = true;
 
     // Parallel: compress all blocks, then concatenate.
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        let stores: Vec<Lz77Store> = ranges
+        let results: Vec<(Lz77Store, bool)> = ranges
             .par_iter()
             .map(|&(start, end)| {
                 lz77_optimal(
@@ -1338,14 +1373,15 @@ fn blocksplit_attempt<W: Write>(
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(stop_to_error)?;
-        for (i, store) in stores.iter().enumerate() {
+        for (i, (store, fo)) in results.iter().enumerate() {
+            fully_optimized &= fo;
             totalcost +=
                 calculate_block_size_auto_type_with_scratch(store, 0, store.size(), &mut scratch);
             debug_assert!(instart == inend || store.size() > 0);
             for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
                 lz77.append_store_item(litlens, pos as usize);
             }
-            if i < stores.len() - 1 {
+            if i < results.len() - 1 {
                 splitpoints.push(lz77.size());
             }
         }
@@ -1356,7 +1392,7 @@ fn blocksplit_attempt<W: Write>(
     {
         let nranges = ranges.len();
         for (i, &(start, end)) in ranges.iter().enumerate() {
-            let store = lz77_optimal(
+            let (store, fo) = lz77_optimal(
                 &mut ZopfliLongestMatchCache::new(end - start),
                 in_data,
                 start,
@@ -1366,6 +1402,7 @@ fn blocksplit_attempt<W: Write>(
                 stop,
             )
             .map_err(stop_to_error)?;
+            fully_optimized &= fo;
             totalcost +=
                 calculate_block_size_auto_type_with_scratch(&store, 0, store.size(), &mut scratch);
             debug_assert!(instart == inend || store.size() > 0);
@@ -1400,7 +1437,8 @@ fn blocksplit_attempt<W: Write>(
         }
     }
 
-    add_all_blocks(&splitpoints, &lz77, final_block, in_data, bitwise_writer)
+    add_all_blocks(&splitpoints, &lz77, final_block, in_data, bitwise_writer)?;
+    Ok(fully_optimized)
 }
 
 /// Since an uncompressed block can be max 65535 in size, it actually adds

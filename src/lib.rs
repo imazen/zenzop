@@ -48,7 +48,7 @@ macro_rules! log_enabled {
 #[cfg_attr(not(feature = "std"), macro_use)]
 extern crate alloc;
 
-pub use deflate::{BlockType, DeflateEncoder};
+pub use deflate::{BlockType, CompressResult, DeflateEncoder};
 pub use enough::{Stop, StopReason, Unstoppable};
 #[cfg(feature = "gzip")]
 pub use gzip::GzipEncoder;
