@@ -9,93 +9,133 @@ on:
       - opened
       - synchronize
 
-jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        conf:
-          - stable
-          - msrv
-        include:
-          - conf: stable
-            toolchain: stable
-          - conf: nightly
-            toolchain: nightly
-          - conf: msrv
-            toolchain: "1.82.0"
-    env:
-      RUST_BACKTRACE: 1
+# Cancel in-progress runs for the same branch/PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
-    # For other ways of skipping CI runs, see: https://docs.github.com/en/actions/managing-workflow-runs/skipping-workflow-runs
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Lint & format (nightly, Linux only) ──────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
     if: >-
       (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
       (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
-
-    runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v6
-
-      - name: Install ${{ matrix.toolchain }}
-        uses: dtolnay/rust-toolchain@v1
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-hack
-        if: matrix.conf == 'nightly'
-        uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
         with:
           tool: cargo-hack
 
-      - name: Install clippy-sarif
-        if: matrix.conf == 'nightly'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: clippy-sarif
-
-      - name: Install sarif-fmt
-        if: matrix.conf == 'nightly'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: sarif-fmt
-
-      - name: Run rustfmt
-        if: matrix.conf == 'nightly'
+      - name: Check formatting
         run: cargo fmt --check --verbose -- --color=always
 
-      - name: Run linter for all feature combinations
-        if: matrix.conf == 'nightly'
-        run: >
-          set -o pipefail;
-          cargo hack clippy --no-deps --all-targets --feature-powerset --message-format=json -- -D warnings
-          | clippy-sarif
-          | tee clippy-results.sarif
-          | sarif-fmt
+      - name: Clippy (all feature combinations)
+        run: cargo hack clippy --no-deps --all-targets --feature-powerset -- -D warnings
 
-      - name: Run tests
-        run: |
-          cargo test --release
-          cargo build --release && ./test/run.sh
-
-      - name: Run tests (no-std)
-        run: cargo test --release --no-default-features --features gzip,zlib
-
-      # The documentation generation command should match what's defined on
-      # Cargo.toml's `package.metadata.docs.rs` section for docs.rs
       - name: Generate documentation
-        if: matrix.conf == 'nightly'
         run: cargo doc --all-features
 
-      - name: Upload analysis results to GitHub
-        uses: github/codeql-action/upload-sarif@v4
-        if: always() && matrix.conf == 'nightly'
-        continue-on-error: true
+  # ── Build & test across platforms ────────────────────────────────────
+  test:
+    name: Test (${{ matrix.name }})
+    if: >-
+      (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
+      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Native targets ──
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            toolchain: stable
+          - name: Linux aarch64
+            runner: ubuntu-24.04-arm
+            toolchain: stable
+          - name: macOS arm64
+            runner: macos-latest
+            toolchain: stable
+          - name: macOS x86_64
+            runner: macos-13
+            toolchain: stable
+          - name: Windows x86_64
+            runner: windows-latest
+            toolchain: stable
+
+          # ── MSRV check ──
+          - name: MSRV (1.82)
+            runner: ubuntu-latest
+            toolchain: "1.82.0"
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
         with:
-          sarif_file: clippy-results.sarif
-          category: clippy
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (default features)
+        run: cargo build --release
+
+      - name: Test (default features)
+        run: cargo test --release
+
+      - name: Test (no_std + gzip + zlib)
+        run: cargo test --release --no-default-features --features gzip,zlib
+
+      - name: Golden master tests
+        shell: bash
+        run: cargo build --release && ./test/run.sh
+
+  # ── WebAssembly targets ──────────────────────────────────────────────
+  wasm:
+    name: WASM (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
+      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wasm32-wasip1
+            target: wasm32-wasip1
+            rustflags: ""
+          - name: wasm32-wasip1 +simd128
+            target: wasm32-wasip1
+            rustflags: "-Ctarget-feature=+simd128"
+          - name: wasm32-unknown-unknown
+            target: wasm32-unknown-unknown
+            rustflags: ""
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      # Dev-dependencies (proptest → wait-timeout) don't compile for wasm,
+      # so only build-verify. Unit tests run on all 5 native platforms.
+      - name: Build (no_std)
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --target ${{ matrix.target }} --no-default-features
+
+      - name: Build (default features)
+        if: matrix.target == 'wasm32-wasip1'
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --target ${{ matrix.target }}
+
