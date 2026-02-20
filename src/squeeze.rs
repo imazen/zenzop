@@ -553,7 +553,7 @@ pub fn lz77_optimal<C: Cache>(
         if cost < bestcost {
             iterations_without_improvement = 0;
             /* Copy to the output store. */
-            outputstore = currentstore.clone();
+            outputstore.clone_from(&currentstore);
             beststats = stats;
             bestcost = cost;
 

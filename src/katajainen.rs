@@ -7,9 +7,9 @@ use core::cmp::{self, Ordering};
 
 const NONE: u32 = u32::MAX;
 
-struct Thing {
-    nodes: Vec<Node>,
-    leaves: Vec<Leaf>,
+struct Thing<'a> {
+    nodes: &'a mut Vec<Node>,
+    leaves: &'a mut Vec<Leaf>,
     lists: [List; 15],
 }
 
@@ -46,60 +46,78 @@ struct List {
     lookahead1: u32, // Index into nodes Vec.
 }
 
+/// Reusable scratch buffers for `length_limited_code_lengths_into`.
+/// Avoids repeated allocation of leaves and nodes Vecs in hot loops.
+pub struct HuffmanScratch {
+    leaves: Vec<Leaf>,
+    nodes: Vec<Node>,
+}
+
+impl HuffmanScratch {
+    pub fn new() -> Self {
+        Self {
+            leaves: Vec::new(),
+            nodes: Vec::new(),
+        }
+    }
+}
+
 /// Calculates the bitlengths for the Huffman tree, based on the counts of each
-/// symbol.
-pub fn length_limited_code_lengths(frequencies: &[usize], max_bits: usize) -> Vec<u32> {
+/// symbol. Writes results into `bit_lengths` which must be `frequencies.len()` long.
+/// Uses `scratch` to avoid allocations.
+pub fn length_limited_code_lengths_into(
+    frequencies: &[usize],
+    max_bits: usize,
+    scratch: &mut HuffmanScratch,
+    bit_lengths: &mut [u32],
+) {
     let num_freqs = frequencies.len();
     assert!(num_freqs <= 288);
+    assert!(bit_lengths.len() >= num_freqs);
+
+    // Zero the output.
+    bit_lengths[..num_freqs].fill(0);
 
     // Count used symbols and place them in the leaves.
-    let mut leaves = frequencies
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &freq)| {
-            (freq != 0).then_some(Leaf {
+    scratch.leaves.clear();
+    for (i, &freq) in frequencies.iter().enumerate() {
+        if freq != 0 {
+            scratch.leaves.push(Leaf {
                 weight: freq,
                 count: i,
-            })
-        })
-        .collect::<Vec<_>>();
+            });
+        }
+    }
 
-    let num_symbols = leaves.len();
+    let num_symbols = scratch.leaves.len();
 
     // Short circuit some special cases
-
-    // TODO:
-    // if ((1 << maxbits) < numsymbols) {
-    //   free(leaves);
-    //   return 1;  /* Error, too few maxbits to represent symbols. */
-    // }
-
     if num_symbols <= 2 {
-        // The symbols for the non-zero frequencies can be represented
-        // with zero or one bits.
-        let mut bit_lengths = vec![0; num_freqs];
         for i in 0..num_symbols {
-            bit_lengths[leaves[i].count] = 1;
+            bit_lengths[scratch.leaves[i].count] = 1;
         }
-        return bit_lengths;
+        return;
     }
 
     // Sort the leaves from least frequent to most frequent.
-    leaves.sort();
+    scratch.leaves.sort();
 
     let max_bits = cmp::min(num_symbols - 1, max_bits);
     assert!(max_bits <= 15);
 
     let capacity = max_bits * 2 * num_symbols;
-    let mut nodes = Vec::with_capacity(capacity);
+    scratch.nodes.clear();
+    scratch
+        .nodes
+        .reserve(capacity.saturating_sub(scratch.nodes.capacity()));
 
-    nodes.push(Node {
-        weight: leaves[0].weight,
+    scratch.nodes.push(Node {
+        weight: scratch.leaves[0].weight,
         count: 1,
         tail: NONE,
     });
-    nodes.push(Node {
-        weight: leaves[1].weight,
+    scratch.nodes.push(Node {
+        weight: scratch.leaves[1].weight,
         count: 2,
         tail: NONE,
     });
@@ -110,8 +128,8 @@ pub fn length_limited_code_lengths(frequencies: &[usize], max_bits: usize) -> Ve
     }; 15];
 
     let mut thing = Thing {
-        nodes,
-        leaves,
+        nodes: &mut scratch.nodes,
+        leaves: &mut scratch.leaves,
         lists,
     };
 
@@ -124,10 +142,19 @@ pub fn length_limited_code_lengths(frequencies: &[usize], max_bits: usize) -> Ve
 
     thing.boundary_pm_final(max_bits - 1);
 
-    thing.extract_bit_lengths(max_bits, num_freqs)
+    thing.extract_bit_lengths(max_bits, bit_lengths);
 }
 
-impl Thing {
+/// Calculates the bitlengths for the Huffman tree, based on the counts of each
+/// symbol. Convenience wrapper that allocates internally.
+pub fn length_limited_code_lengths(frequencies: &[usize], max_bits: usize) -> Vec<u32> {
+    let mut scratch = HuffmanScratch::new();
+    let mut result = vec![0; frequencies.len()];
+    length_limited_code_lengths_into(frequencies, max_bits, &mut scratch, &mut result);
+    result
+}
+
+impl Thing<'_> {
     fn boundary_pm(&mut self, index: usize) {
         let num_symbols = self.leaves.len();
 
@@ -210,7 +237,7 @@ impl Thing {
         }
     }
 
-    fn extract_bit_lengths(&self, max_bits: usize, num_freqs: usize) -> Vec<u32> {
+    fn extract_bit_lengths(&self, max_bits: usize, bit_lengths: &mut [u32]) {
         let mut counts = [0; 16];
         let mut end = 16;
         let mut ptr = 15;
@@ -231,8 +258,6 @@ impl Thing {
 
         let mut val = counts[15];
 
-        let mut bit_lengths = vec![0; num_freqs];
-
         while ptr >= end {
             while val > counts[ptr - 1] {
                 bit_lengths[self.leaves[val - 1].count] = value;
@@ -241,8 +266,6 @@ impl Thing {
             ptr -= 1;
             value += 1;
         }
-
-        bit_lengths
     }
 }
 
@@ -310,5 +333,25 @@ mod test {
         let output = length_limited_code_lengths(&input, 7);
         let answer = [0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         assert_eq!(output, answer);
+    }
+
+    #[test]
+    fn scratch_reuse_produces_same_results() {
+        let mut scratch = HuffmanScratch::new();
+
+        // Run multiple different inputs through the same scratch
+        let inputs: &[&[usize]] = &[
+            &[1, 1, 5, 7, 10, 14],
+            &[252, 0, 1, 6, 9, 10, 6, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 252, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ];
+        let max_bits = [3, 7, 7];
+
+        for (input, &mb) in inputs.iter().zip(max_bits.iter()) {
+            let expected = length_limited_code_lengths(input, mb);
+            let mut result = vec![0u32; input.len()];
+            length_limited_code_lengths_into(input, mb, &mut scratch, &mut result);
+            assert_eq!(result, expected);
+        }
     }
 }

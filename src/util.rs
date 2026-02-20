@@ -1,5 +1,3 @@
-use alloc::boxed::Box;
-
 /// Number of distinct literal/length symbols in DEFLATE
 pub const ZOPFLI_NUM_LL: usize = 288;
 /// Number of distinct distance symbols in DEFLATE
@@ -41,11 +39,3 @@ pub const ZOPFLI_CACHE_LENGTH: usize = 8;
 /// faster on some specific files.
 /// Good value: e.g. 8192.
 pub const ZOPFLI_MAX_CHAIN_HITS: usize = 8192;
-
-#[inline]
-pub fn boxed_array<T: Clone, const N: usize>(element: T) -> Box<[T; N]> {
-    match vec![element; N].into_boxed_slice().try_into() {
-        Ok(x) => x,
-        Err(_) => unreachable!(),
-    }
-}

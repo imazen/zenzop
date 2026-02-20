@@ -8,7 +8,7 @@ use crate::{
     blocksplitter::{blocksplit, blocksplit_lz77},
     cache::ZopfliLongestMatchCache,
     iter::ToFlagLastIterator,
-    katajainen::length_limited_code_lengths,
+    katajainen::{length_limited_code_lengths, length_limited_code_lengths_into, HuffmanScratch},
     lz77::{LitLen, Lz77Store},
     squeeze::{lz77_optimal, lz77_optimal_fixed},
     symbols::{
@@ -273,15 +273,28 @@ pub enum BlockType {
     Dynamic,
 }
 
-fn fixed_tree() -> (Vec<u32>, Vec<u32>) {
-    let mut ll = Vec::with_capacity(ZOPFLI_NUM_LL);
-    ll.resize(144, 8);
-    ll.resize(256, 9);
-    ll.resize(280, 7);
-    ll.resize(288, 8);
-    let d = vec![5; ZOPFLI_NUM_D];
-    (ll, d)
-}
+const FIXED_TREE_LL: [u32; ZOPFLI_NUM_LL] = {
+    let mut ll = [0u32; ZOPFLI_NUM_LL];
+    let mut i = 0;
+    while i < 144 {
+        ll[i] = 8;
+        i += 1;
+    }
+    while i < 256 {
+        ll[i] = 9;
+        i += 1;
+    }
+    while i < 280 {
+        ll[i] = 7;
+        i += 1;
+    }
+    while i < 288 {
+        ll[i] = 8;
+        i += 1;
+    }
+    ll
+};
+const FIXED_TREE_D: [u32; ZOPFLI_NUM_D] = [5; ZOPFLI_NUM_D];
 
 /// Changes the population counts in a way that the consequent Huffman tree
 /// compression, especially its rle-part, will be more likely to compress this data
@@ -303,7 +316,7 @@ fn optimize_huffman_for_rle(counts: &mut [usize]) {
 
     // 2) Let's mark all population counts that already can be encoded
     // with an rle code.
-    let mut good_for_rle = vec![false; length];
+    let mut good_for_rle = [false; ZOPFLI_NUM_LL]; // max counts.len() is 288
 
     // Let's not spoil any of the existing good rle codes.
     // Mark any seq of 0's that is longer than 5 as a good_for_rle.
@@ -468,25 +481,20 @@ fn calculate_block_symbol_size(
     } else {
         let (ll_counts, d_counts) = lz77.get_histogram(lstart, lend);
         calculate_block_symbol_size_given_counts(
-            &*ll_counts,
-            &*d_counts,
-            ll_lengths,
-            d_lengths,
-            lz77,
-            lstart,
-            lend,
+            &ll_counts, &d_counts, ll_lengths, d_lengths, lz77, lstart, lend,
         )
     }
 }
 
 /// Encodes the Huffman tree and returns how many bits its encoding takes; only returns the size
 /// and runs faster.
-fn encode_tree_no_output(
+fn encode_tree_no_output_with_scratch(
     ll_lengths: &[u32],
     d_lengths: &[u32],
     use_16: bool,
     use_17: bool,
     use_18: bool,
+    scratch: &mut HuffmanScratch,
 ) -> usize {
     let mut hlit = 29; /* 286 - 257 */
     let mut hdist = 29; /* 32 - 1, but gzip does not like hdist > 29.*/
@@ -578,7 +586,8 @@ fn encode_tree_no_output(
         i += 1;
     }
 
-    let clcl = length_limited_code_lengths(&clcounts, 7);
+    let mut clcl = [0u32; 19];
+    length_limited_code_lengths_into(&clcounts, 7, scratch, &mut clcl);
 
     let mut hclen = 15;
     /* Trim zeros. */
@@ -599,8 +608,31 @@ fn encode_tree_no_output(
     result_size
 }
 
+/// Encodes the Huffman tree and returns how many bits its encoding takes; only returns the size
+/// and runs faster. Non-scratch version for callers outside the hot path.
+fn encode_tree_no_output(
+    ll_lengths: &[u32],
+    d_lengths: &[u32],
+    use_16: bool,
+    use_17: bool,
+    use_18: bool,
+) -> usize {
+    encode_tree_no_output_with_scratch(
+        ll_lengths,
+        d_lengths,
+        use_16,
+        use_17,
+        use_18,
+        &mut HuffmanScratch::new(),
+    )
+}
+
 /// Gives the exact size of the tree, in bits, as it will be encoded in DEFLATE.
-fn calculate_tree_size(ll_lengths: &[u32], d_lengths: &[u32]) -> usize {
+fn calculate_tree_size_with_scratch(
+    ll_lengths: &[u32],
+    d_lengths: &[u32],
+    scratch: &mut HuffmanScratch,
+) -> usize {
     static TRUTH_TABLE: [(bool, bool, bool); 8] = [
         (false, false, false),
         (true, false, false),
@@ -615,7 +647,9 @@ fn calculate_tree_size(ll_lengths: &[u32], d_lengths: &[u32]) -> usize {
     TRUTH_TABLE
         .iter()
         .map(|&(use_16, use_17, use_18)| {
-            encode_tree_no_output(ll_lengths, d_lengths, use_16, use_17, use_18)
+            encode_tree_no_output_with_scratch(
+                ll_lengths, d_lengths, use_16, use_17, use_18, scratch,
+            )
         })
         .min()
         .unwrap_or(0)
@@ -845,7 +879,7 @@ fn add_lz77_block<W: Write>(
         BlockType::Fixed => {
             bitwise_writer.add_bit(1)?;
             bitwise_writer.add_bit(0)?;
-            fixed_tree()
+            (FIXED_TREE_LL.to_vec(), FIXED_TREE_D.to_vec())
         }
         BlockType::Dynamic => {
             bitwise_writer.add_bit(0)?;
@@ -914,13 +948,9 @@ pub fn calculate_block_size(lz77: &Lz77Store, lstart: usize, lend: usize, btype:
             (blocks * 5 * 8 + length * 8) as f64
         }
         BlockType::Fixed => {
-            let fixed_tree = fixed_tree();
-            let ll_lengths = fixed_tree.0;
-            let d_lengths = fixed_tree.1;
-
             let mut result = 3.0; /* bfinal and btype bits */
-            result +=
-                calculate_block_symbol_size(&ll_lengths, &d_lengths, lz77, lstart, lend) as f64;
+            result += calculate_block_symbol_size(&FIXED_TREE_LL, &FIXED_TREE_D, lz77, lstart, lend)
+                as f64;
             result
         }
         BlockType::Dynamic => get_dynamic_lengths(lz77, lstart, lend).0 + 3.0,
@@ -930,37 +960,35 @@ pub fn calculate_block_size(lz77: &Lz77Store, lstart: usize, lend: usize, btype:
 /// Tries out `OptimizeHuffmanForRle` for this block, if the result is smaller,
 /// uses it, otherwise keeps the original. Returns size of encoded tree and data in
 /// bits, not including the 3-bit block header.
-fn try_optimize_huffman_for_rle(
+#[allow(clippy::too_many_arguments)]
+fn try_optimize_huffman_for_rle_with_scratch(
     lz77: &Lz77Store,
     lstart: usize,
     lend: usize,
-    ll_counts: &[usize],
-    d_counts: &[usize],
-    ll_lengths: Vec<u32>,
-    d_lengths: Vec<u32>,
-) -> (f64, Vec<u32>, Vec<u32>) {
-    let mut ll_counts2 = Vec::from(ll_counts);
-    let mut d_counts2 = Vec::from(d_counts);
+    ll_counts: &[usize; ZOPFLI_NUM_LL],
+    d_counts: &[usize; ZOPFLI_NUM_D],
+    ll_lengths: &[u32; ZOPFLI_NUM_LL],
+    d_lengths: &[u32; ZOPFLI_NUM_D],
+    scratch: &mut HuffmanScratch,
+) -> (f64, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
+    let mut ll_counts2 = *ll_counts;
+    let mut d_counts2 = *d_counts;
 
-    let treesize = calculate_tree_size(&ll_lengths, &d_lengths);
+    let treesize = calculate_tree_size_with_scratch(ll_lengths, d_lengths, scratch);
     let datasize = calculate_block_symbol_size_given_counts(
-        ll_counts,
-        d_counts,
-        &ll_lengths,
-        &d_lengths,
-        lz77,
-        lstart,
-        lend,
+        ll_counts, d_counts, ll_lengths, d_lengths, lz77, lstart, lend,
     );
 
     optimize_huffman_for_rle(&mut ll_counts2);
     optimize_huffman_for_rle(&mut d_counts2);
 
-    let ll_lengths2 = length_limited_code_lengths(&ll_counts2, 15);
-    let mut d_lengths2 = length_limited_code_lengths(&d_counts2, 15);
+    let mut ll_lengths2 = [0u32; ZOPFLI_NUM_LL];
+    let mut d_lengths2 = [0u32; ZOPFLI_NUM_D];
+    length_limited_code_lengths_into(&ll_counts2, 15, scratch, &mut ll_lengths2);
+    length_limited_code_lengths_into(&d_counts2, 15, scratch, &mut d_lengths2);
     patch_distance_codes_for_buggy_decoders(&mut d_lengths2[..]);
 
-    let treesize2 = calculate_tree_size(&ll_lengths2, &d_lengths2);
+    let treesize2 = calculate_tree_size_with_scratch(&ll_lengths2, &d_lengths2, scratch);
     let datasize2 = calculate_block_symbol_size_given_counts(
         ll_counts,
         d_counts,
@@ -972,35 +1000,48 @@ fn try_optimize_huffman_for_rle(
     );
 
     if treesize2 + datasize2 < treesize + datasize {
-        (((treesize2 + datasize2) as f64), ll_lengths2, d_lengths2)
+        ((treesize2 + datasize2) as f64, ll_lengths2, d_lengths2)
     } else {
-        ((treesize + datasize) as f64, ll_lengths, d_lengths)
+        ((treesize + datasize) as f64, *ll_lengths, *d_lengths)
     }
 }
 
-/// Calculates the bit lengths for the symbols for dynamic blocks. Chooses bit
-/// lengths that give the smallest size of tree encoding + encoding of all the
-/// symbols to have smallest output size. This are not necessarily the ideal Huffman
-/// bit lengths. Returns size of encoded tree and data in bits, not including the
-/// 3-bit block header.
-fn get_dynamic_lengths(lz77: &Lz77Store, lstart: usize, lend: usize) -> (f64, Vec<u32>, Vec<u32>) {
+/// Calculates the bit lengths for the symbols for dynamic blocks. Zero-allocation
+/// version using scratch buffers.
+fn get_dynamic_lengths_with_scratch(
+    lz77: &Lz77Store,
+    lstart: usize,
+    lend: usize,
+    scratch: &mut HuffmanScratch,
+) -> (f64, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
     let (mut ll_counts, d_counts) = lz77.get_histogram(lstart, lend);
     ll_counts[256] = 1; /* End symbol. */
 
-    let ll_lengths = length_limited_code_lengths(&*ll_counts, 15);
-    let mut d_lengths = length_limited_code_lengths(&*d_counts, 15);
+    let mut ll_lengths = [0u32; ZOPFLI_NUM_LL];
+    let mut d_lengths = [0u32; ZOPFLI_NUM_D];
+    length_limited_code_lengths_into(&ll_counts, 15, scratch, &mut ll_lengths);
+    length_limited_code_lengths_into(&d_counts, 15, scratch, &mut d_lengths);
 
     patch_distance_codes_for_buggy_decoders(&mut d_lengths[..]);
 
-    try_optimize_huffman_for_rle(
+    try_optimize_huffman_for_rle_with_scratch(
         lz77,
         lstart,
         lend,
-        &*ll_counts,
-        &*d_counts,
-        ll_lengths,
-        d_lengths,
+        &ll_counts,
+        &d_counts,
+        &ll_lengths,
+        &d_lengths,
+        scratch,
     )
+}
+
+/// Calculates the bit lengths for the symbols for dynamic blocks.
+/// Non-scratch version for callers outside the hot path.
+fn get_dynamic_lengths(lz77: &Lz77Store, lstart: usize, lend: usize) -> (f64, Vec<u32>, Vec<u32>) {
+    let mut scratch = HuffmanScratch::new();
+    let (cost, ll, d) = get_dynamic_lengths_with_scratch(lz77, lstart, lend, &mut scratch);
+    (cost, ll.to_vec(), d.to_vec())
 }
 
 /// Adds all lit/len and dist codes from the lists as huffman symbols. Does not add
@@ -1146,17 +1187,30 @@ fn add_lz77_block_auto_type<W: Write>(
     }
 }
 
-/// Calculates block size in bits, automatically using the best btype.
-pub fn calculate_block_size_auto_type(lz77: &Lz77Store, lstart: usize, lend: usize) -> f64 {
+/// Zero-allocation version of `calculate_block_size` for the Dynamic case.
+fn calculate_block_size_dynamic_with_scratch(
+    lz77: &Lz77Store,
+    lstart: usize,
+    lend: usize,
+    scratch: &mut HuffmanScratch,
+) -> f64 {
+    get_dynamic_lengths_with_scratch(lz77, lstart, lend, scratch).0 + 3.0
+}
+
+/// Zero-allocation version of `calculate_block_size_auto_type`.
+pub fn calculate_block_size_auto_type_with_scratch(
+    lz77: &Lz77Store,
+    lstart: usize,
+    lend: usize,
+    scratch: &mut HuffmanScratch,
+) -> f64 {
     let uncompressedcost = calculate_block_size(lz77, lstart, lend, BlockType::Uncompressed);
-    /* Don't do the expensive fixed cost calculation for larger blocks that are
-    unlikely to use it. */
     let fixedcost = if lz77.size() > 1000 {
         uncompressedcost
     } else {
         calculate_block_size(lz77, lstart, lend, BlockType::Fixed)
     };
-    let dyncost = calculate_block_size(lz77, lstart, lend, BlockType::Dynamic);
+    let dyncost = calculate_block_size_dynamic_with_scratch(lz77, lstart, lend, scratch);
     uncompressedcost.min(fixedcost).min(dyncost)
 }
 
@@ -1236,9 +1290,12 @@ fn blocksplit_attempt<W: Write>(
     #[cfg(not(feature = "parallel"))]
     let stores: Vec<Lz77Store> = ranges.iter().map(compress_range).collect();
 
+    let mut scratch = HuffmanScratch::new();
+
     // Concatenate stores and build splitpoints.
     for (i, store) in stores.iter().enumerate() {
-        totalcost += calculate_block_size_auto_type(store, 0, store.size());
+        totalcost +=
+            calculate_block_size_auto_type_with_scratch(store, 0, store.size(), &mut scratch);
         debug_assert!(instart == inend || store.size() > 0);
         for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
             lz77.append_store_item(litlens, pos);
@@ -1258,10 +1315,12 @@ fn blocksplit_attempt<W: Write>(
 
         let mut last = 0;
         for &item in &splitpoints2 {
-            totalcost2 += calculate_block_size_auto_type(&lz77, last, item);
+            totalcost2 +=
+                calculate_block_size_auto_type_with_scratch(&lz77, last, item, &mut scratch);
             last = item;
         }
-        totalcost2 += calculate_block_size_auto_type(&lz77, last, lz77.size());
+        totalcost2 +=
+            calculate_block_size_auto_type_with_scratch(&lz77, last, lz77.size(), &mut scratch);
 
         if totalcost2 < totalcost {
             splitpoints = splitpoints2;

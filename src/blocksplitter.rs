@@ -1,9 +1,13 @@
 use alloc::vec::Vec;
+use core::cell::RefCell;
 
 #[cfg(feature = "std")]
 use log::{debug, log_enabled};
 
-use crate::{cache::NoCache, deflate::calculate_block_size_auto_type, lz77::Lz77Store};
+use crate::{
+    cache::NoCache, deflate::calculate_block_size_auto_type_with_scratch,
+    katajainen::HuffmanScratch, lz77::Lz77Store,
+};
 
 /// Finds minimum of function `f(i)` where `i` is of type `usize`, `f(i)` is of type
 /// `f64`, `i` is in range `start-end` (excluding `end`).
@@ -56,16 +60,14 @@ fn find_minimum<F: Fn(usize) -> f64>(f: F, start: usize, end: usize) -> (usize, 
     }
 }
 
-/// Returns estimated cost of a block in bits.  It includes the size to encode the
-/// tree and the size to encode all literal, length and distance symbols and their
-/// extra bits.
-///
-/// litlens: lz77 lit/lengths
-/// dists: ll77 distances
-/// lstart: start of block
-/// lend: end of block (not inclusive)
-fn estimate_cost(lz77: &Lz77Store, lstart: usize, lend: usize) -> f64 {
-    calculate_block_size_auto_type(lz77, lstart, lend)
+/// Returns estimated cost of a block in bits, using scratch buffers for zero-allocation.
+fn estimate_cost(
+    lz77: &Lz77Store,
+    lstart: usize,
+    lend: usize,
+    scratch: &RefCell<HuffmanScratch>,
+) -> f64 {
+    calculate_block_size_auto_type_with_scratch(lz77, lstart, lend, &mut scratch.borrow_mut())
 }
 
 /// Finds next block to try to split, the largest of the available ones.
@@ -160,10 +162,13 @@ pub fn blocksplit_lz77(lz77: &Lz77Store, maxblocks: u16, splitpoints: &mut Vec<u
     let mut lstart = 0;
     let mut lend = lz77.size();
 
+    // RefCell allows the Fn closure to borrow scratch mutably.
+    let scratch = RefCell::new(HuffmanScratch::new());
+
     while maxblocks != 0 && numblocks < u32::from(maxblocks) {
         debug_assert!(lstart < lend);
         let find_minimum_result = find_minimum(
-            |i| estimate_cost(lz77, lstart, i) + estimate_cost(lz77, i, lend),
+            |i| estimate_cost(lz77, lstart, i, &scratch) + estimate_cost(lz77, i, lend, &scratch),
             lstart + 1,
             lend,
         );
@@ -173,7 +178,7 @@ pub fn blocksplit_lz77(lz77: &Lz77Store, maxblocks: u16, splitpoints: &mut Vec<u
         debug_assert!(llpos > lstart);
         debug_assert!(llpos < lend);
 
-        let origcost = estimate_cost(lz77, lstart, lend);
+        let origcost = estimate_cost(lz77, lstart, lend, &scratch);
 
         if splitcost > origcost || llpos == lstart + 1 || llpos == lend {
             done[lstart] = 1;
