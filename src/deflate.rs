@@ -1313,8 +1313,8 @@ fn add_non_compressed_block<W: Write>(
 }
 
 struct BitwiseWriter<W> {
-    bit: u8,
-    bp: u8,
+    buf: u64,
+    bp: u32,
     len: usize,
     out: W,
 }
@@ -1322,7 +1322,7 @@ struct BitwiseWriter<W> {
 impl<W: Write> BitwiseWriter<W> {
     const fn new(out: W) -> Self {
         Self {
-            bit: 0,
+            buf: 0,
             bp: 0,
             len: 0,
             out,
@@ -1345,42 +1345,42 @@ impl<W: Write> BitwiseWriter<W> {
     }
 
     fn add_bit(&mut self, bit: u8) -> Result<(), Error> {
-        self.bit |= bit << self.bp;
-        self.bp += 1;
-        if self.bp == 8 {
-            self.finish_partial_bits()
-        } else {
-            Ok(())
-        }
+        self.add_bits(u32::from(bit), 1)
     }
 
     fn add_bits(&mut self, symbol: u32, length: u32) -> Result<(), Error> {
-        // TODO: make more efficient (add more bits at once)
-        for i in 0..length {
-            let bit = ((symbol >> i) & 1) as u8;
-            self.add_bit(bit)?;
-        }
-
-        Ok(())
+        self.buf |= (symbol as u64) << self.bp;
+        self.bp += length;
+        self.flush_bits()
     }
 
     /// Adds bits, like `add_bits`, but the order is inverted. The deflate specification
     /// uses both orders in one standard.
     fn add_huffman_bits(&mut self, symbol: u32, length: u32) -> Result<(), Error> {
-        // TODO: make more efficient (add more bits at once)
-        for i in 0..length {
-            let bit = ((symbol >> (length - i - 1)) & 1) as u8;
-            self.add_bit(bit)?;
-        }
+        // Reverse bit order: Huffman codes are stored MSB-first
+        let reversed = symbol.reverse_bits() >> (32 - length);
+        self.add_bits(reversed, length)
+    }
 
+    /// Flush all complete bytes from the bit buffer.
+    fn flush_bits(&mut self) -> Result<(), Error> {
+        let full_bytes = (self.bp / 8) as usize;
+        if full_bytes > 0 {
+            let bytes = self.buf.to_le_bytes();
+            self.out.write_all(&bytes[..full_bytes])?;
+            self.len += full_bytes;
+            let shift = (full_bytes as u32) * 8;
+            self.buf >>= shift;
+            self.bp -= shift;
+        }
         Ok(())
     }
 
     fn finish_partial_bits(&mut self) -> Result<(), Error> {
         if self.bp != 0 {
-            let bytes = &[self.bit];
-            self.add_bytes(bytes)?;
-            self.bit = 0;
+            let byte = (self.buf & 0xFF) as u8;
+            self.add_bytes(&[byte])?;
+            self.buf = 0;
             self.bp = 0;
         }
         Ok(())
