@@ -1,25 +1,22 @@
 use alloc::vec::Vec;
-use core::{
-    cell::Cell,
-    cmp::{self, Ordering},
-};
-
-use bumpalo::Bump;
+use core::cmp::{self, Ordering};
 
 // Bounded package merge algorithm, based on the paper
 // "A Fast and Space-Economical Algorithm for Length-Limited Coding
 // Jyrki Katajainen, Alistair Moffat, Andrew Turpin".
 
-struct Thing<'a> {
-    node_arena: &'a Bump,
+const NONE: u32 = u32::MAX;
+
+struct Thing {
+    nodes: Vec<Node>,
     leaves: Vec<Leaf>,
-    lists: [List<'a>; 15],
+    lists: [List; 15],
 }
 
-struct Node<'a> {
+struct Node {
     weight: usize,
     count: usize,
-    tail: Cell<Option<&'a Node<'a>>>,
+    tail: u32, // Index into nodes Vec. NONE = no tail.
 }
 
 struct Leaf {
@@ -44,9 +41,9 @@ impl PartialOrd for Leaf {
 }
 
 #[derive(Clone, Copy)]
-struct List<'arena> {
-    lookahead0: &'arena Node<'arena>,
-    lookahead1: &'arena Node<'arena>,
+struct List {
+    lookahead0: u32, // Index into nodes Vec.
+    lookahead1: u32, // Index into nodes Vec.
 }
 
 /// Calculates the bitlengths for the Huffman tree, based on the counts of each
@@ -93,28 +90,27 @@ pub fn length_limited_code_lengths(frequencies: &[usize], max_bits: usize) -> Ve
     let max_bits = cmp::min(num_symbols - 1, max_bits);
     assert!(max_bits <= 15);
 
-    let arena_capacity = max_bits * 2 * num_symbols;
-    let node_arena = Bump::with_capacity(arena_capacity);
+    let capacity = max_bits * 2 * num_symbols;
+    let mut nodes = Vec::with_capacity(capacity);
 
-    let node0 = node_arena.alloc(Node {
+    nodes.push(Node {
         weight: leaves[0].weight,
         count: 1,
-        tail: Cell::new(None),
+        tail: NONE,
     });
-
-    let node1 = node_arena.alloc(Node {
+    nodes.push(Node {
         weight: leaves[1].weight,
         count: 2,
-        tail: Cell::new(None),
+        tail: NONE,
     });
 
     let lists = [List {
-        lookahead0: node0,
-        lookahead1: node1,
+        lookahead0: 0,
+        lookahead1: 1,
     }; 15];
 
     let mut thing = Thing {
-        node_arena: &node_arena,
+        nodes,
         leaves,
         lists,
     };
@@ -131,11 +127,11 @@ pub fn length_limited_code_lengths(frequencies: &[usize], max_bits: usize) -> Ve
     thing.extract_bit_lengths(max_bits, num_freqs)
 }
 
-impl Thing<'_> {
+impl Thing {
     fn boundary_pm(&mut self, index: usize) {
         let num_symbols = self.leaves.len();
 
-        let last_count = self.lists[index].lookahead1.count; // Count of last chain of list.
+        let last_count = self.nodes[self.lists[index].lookahead1 as usize].count;
 
         if index == 0 && last_count >= num_symbols {
             return;
@@ -145,33 +141,40 @@ impl Thing<'_> {
 
         if index == 0 {
             // New leaf node in list 0.
-            let new_chain = self.node_arena.alloc(Node {
+            let tail = self.nodes[self.lists[index].lookahead0 as usize].tail;
+            let idx = self.nodes.len() as u32;
+            self.nodes.push(Node {
                 weight: self.leaves[last_count].weight,
                 count: last_count + 1,
-                tail: self.lists[index].lookahead0.tail.clone(),
+                tail,
             });
-            self.lists[index].lookahead1 = new_chain;
+            self.lists[index].lookahead1 = idx;
         } else {
             let weight_sum = {
                 let previous_list = &self.lists[index - 1];
-                previous_list.lookahead0.weight + previous_list.lookahead1.weight
+                self.nodes[previous_list.lookahead0 as usize].weight
+                    + self.nodes[previous_list.lookahead1 as usize].weight
             };
 
             if last_count < num_symbols && weight_sum > self.leaves[last_count].weight {
                 // New leaf inserted in list, so count is incremented.
-                let new_chain = self.node_arena.alloc(Node {
+                let tail = self.nodes[self.lists[index].lookahead0 as usize].tail;
+                let idx = self.nodes.len() as u32;
+                self.nodes.push(Node {
                     weight: self.leaves[last_count].weight,
                     count: last_count + 1,
-                    tail: self.lists[index].lookahead0.tail.clone(),
+                    tail,
                 });
-                self.lists[index].lookahead1 = new_chain;
+                self.lists[index].lookahead1 = idx;
             } else {
-                let new_chain = self.node_arena.alloc(Node {
+                let tail = self.lists[index - 1].lookahead1;
+                let idx = self.nodes.len() as u32;
+                self.nodes.push(Node {
                     weight: weight_sum,
                     count: last_count,
-                    tail: Cell::new(Some(self.lists[index - 1].lookahead1)),
+                    tail,
                 });
-                self.lists[index].lookahead1 = new_chain;
+                self.lists[index].lookahead1 = idx;
 
                 // Two lookahead chains of previous list used up, create new ones.
                 self.boundary_pm(index - 1);
@@ -184,25 +187,26 @@ impl Thing<'_> {
         let num_symbols = self.leaves.len();
 
         // Count of last chain of list.
-        let last_count = self.lists[index].lookahead1.count;
+        let last_count = self.nodes[self.lists[index].lookahead1 as usize].count;
 
         let weight_sum = {
             let previous_list = &self.lists[index - 1];
-            previous_list.lookahead0.weight + previous_list.lookahead1.weight
+            self.nodes[previous_list.lookahead0 as usize].weight
+                + self.nodes[previous_list.lookahead1 as usize].weight
         };
 
         if last_count < num_symbols && weight_sum > self.leaves[last_count].weight {
-            let new_chain = self.node_arena.alloc(Node {
+            let tail = self.nodes[self.lists[index].lookahead1 as usize].tail;
+            let idx = self.nodes.len() as u32;
+            self.nodes.push(Node {
                 weight: 0,
                 count: last_count + 1,
-                tail: self.lists[index].lookahead1.tail.clone(),
+                tail,
             });
-            self.lists[index].lookahead1 = new_chain;
+            self.lists[index].lookahead1 = idx;
         } else {
-            self.lists[index]
-                .lookahead1
-                .tail
-                .set(Some(self.lists[index - 1].lookahead1));
+            let node_idx = self.lists[index].lookahead1 as usize;
+            self.nodes[node_idx].tail = self.lists[index - 1].lookahead1;
         }
     }
 
@@ -212,15 +216,17 @@ impl Thing<'_> {
         let mut ptr = 15;
         let mut value = 1;
 
-        let mut node = self.lists[max_bits - 1].lookahead1;
+        let mut node_idx = self.lists[max_bits - 1].lookahead1 as usize;
 
         end -= 1;
-        counts[end] = node.count;
+        counts[end] = self.nodes[node_idx].count;
 
-        while let Some(tail) = node.tail.get() {
+        let mut tail = self.nodes[node_idx].tail;
+        while tail != NONE {
             end -= 1;
-            counts[end] = tail.count;
-            node = tail;
+            node_idx = tail as usize;
+            counts[end] = self.nodes[node_idx].count;
+            tail = self.nodes[node_idx].tail;
         }
 
         let mut val = counts[15];
@@ -239,73 +245,6 @@ impl Thing<'_> {
         bit_lengths
     }
 }
-
-// fn next_leaf(lists: &mut [List], leaves: &[Leaf], current_list_index: usize) {
-//     let mut current_list = &mut lists[current_list_index];
-//
-//     // The next leaf goes next; counting itself makes the leaf_count increase by one.
-//     current_list.lookahead1.weight = leaves[current_list.next_leaf_index].weight;
-//     current_list.lookahead1.leaf_counts.clear();
-//     current_list.lookahead1.leaf_counts.extend_from_slice(&current_list.lookahead0.leaf_counts);
-//     let last_index = current_list.lookahead1.leaf_counts.len() - 1;
-//     current_list.lookahead1.leaf_counts[last_index] += 1;
-//     current_list.next_leaf_index += 1;
-// }
-
-// fn next_tree(weight_sum: usize, lists: &mut [List], leaves: &[Leaf], current_list_index: usize) {
-//     {
-//         let (head, tail) = lists.split_at_mut(current_list_index);
-//         let prev_list = head.last_mut().unwrap();
-//         let current_list = tail.first_mut().unwrap();
-//
-//         let previous_list_leaf_counts = &prev_list.lookahead1.leaf_counts;
-//
-//         // Make a tree from the lookaheads from the previous list; that goes next.
-//         // This is not a leaf node, so the leaf count stays the same.
-//         current_list.lookahead1.weight = weight_sum;
-//         current_list.lookahead1.leaf_counts.clear();
-//
-//         current_list.lookahead1.leaf_counts.extend_from_slice(previous_list_leaf_counts);
-//         current_list.lookahead1.leaf_counts.push(*current_list.lookahead0.leaf_counts.last().unwrap());
-//     }
-//
-//     // The previous list needs two new lookahead nodes.
-//     boundary_pm(lists, leaves, current_list_index - 1);
-//     boundary_pm(lists, leaves, current_list_index - 1);
-// }
-
-// fn boundary_pm_toplevel(lists: &mut [List], leaves: &[Leaf]) {
-//     let last_index = lists.len() - 1;
-//     boundary_pm(lists, leaves, last_index);
-// }
-
-// fn boundary_pm(lists: &mut [List], leaves: &[Leaf], current_list_index: usize) {
-//     let next_leaf_index = lists[current_list_index].next_leaf_index;
-//     let num_symbols = leaves.len();
-//
-//     if current_list_index == 0 && next_leaf_index == num_symbols {
-//         // We've added all the leaves to the lowest list, so we're done here
-//         return;
-//     }
-//
-//     mem::swap(&mut lists[current_list_index].lookahead0, &mut lists[current_list_index].lookahead1);
-//
-//     if current_list_index == 0 {
-//         lowest_list(lists, leaves);
-//     } else {
-//         // We're at a list other than the lowest list.
-//         let weight_sum = {
-//             let previous_list = &lists[current_list_index - 1];
-//             previous_list.lookahead0.weight + previous_list.lookahead1.weight
-//         };
-//
-//         if next_leaf_index < num_symbols && weight_sum > leaves[next_leaf_index].weight {
-//             next_leaf(lists, leaves, current_list_index);
-//         } else {
-//             next_tree(weight_sum, lists, leaves, current_list_index);
-//         }
-//     }
-// }
 
 #[cfg(test)]
 mod test {
