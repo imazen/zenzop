@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use core::cmp;
 
 use crate::util::{ZOPFLI_MIN_MATCH, ZOPFLI_WINDOW_MASK, ZOPFLI_WINDOW_SIZE};
 
@@ -120,18 +121,22 @@ impl ZopfliHash {
         self.hash1.update(hpos);
 
         // Update "same".
-        let mut amount = 0;
+        let mut amount: u16 = 0;
         let same = self.same[pos.wrapping_sub(1) & ZOPFLI_WINDOW_MASK];
         if same > 1 {
             amount = same - 1;
         }
 
-        let mut another_index = pos + amount as usize + 1;
         let array_pos = array[pos];
-        while another_index < array.len() && array_pos == array[another_index] && amount < u16::MAX
-        {
-            amount += 1;
-            another_index += 1;
+        let start = pos + amount as usize + 1;
+        let scan_end = cmp::min(pos + u16::MAX as usize + 1, array.len());
+        if start < scan_end {
+            for &byte in &array[start..scan_end] {
+                if byte != array_pos {
+                    break;
+                }
+                amount += 1;
+            }
         }
 
         self.same[hpos] = amount;
