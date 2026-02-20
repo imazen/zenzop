@@ -220,7 +220,7 @@ pub fn blocksplit(
     splitpoints: &mut Vec<usize>,
 ) {
     splitpoints.clear();
-    let mut store = Lz77Store::new();
+    let mut store = Lz77Store::with_capacity(inend - instart);
 
     /* Unintuitively, Using a simple LZ77 method here instead of lz77_optimal
     results in better blocks. */

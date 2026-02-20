@@ -213,7 +213,7 @@ fn deflate_part<W: Write>(
             add_non_compressed_block(final_block, in_data, instart, inend, bitwise_writer)
         }
         BlockType::Fixed => {
-            let mut store = Lz77Store::new();
+            let mut store = Lz77Store::with_capacity(inend - instart);
 
             lz77_optimal_fixed(
                 &mut ZopfliLongestMatchCache::new(inend - instart),
@@ -1086,6 +1086,7 @@ fn add_lz77_block_auto_type<W: Write>(
         let instart = lz77.pos[lstart];
         let inend = instart + lz77.get_byte_range(lstart, lend);
 
+        fixedstore = Lz77Store::with_capacity(inend - instart);
         lz77_optimal_fixed(
             &mut ZopfliLongestMatchCache::new(inend - instart),
             in_data,
@@ -1191,7 +1192,7 @@ fn blocksplit_attempt<W: Write>(
     bitwise_writer: &mut BitwiseWriter<W>,
 ) -> Result<(), Error> {
     let mut totalcost = 0.0;
-    let mut lz77 = Lz77Store::new();
+    let mut lz77 = Lz77Store::with_capacity(inend - instart);
 
     /* byte coordinates rather than lz77 index */
     let mut splitpoints_uncompressed = Vec::with_capacity(options.maximum_block_splits as usize);

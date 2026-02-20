@@ -503,8 +503,9 @@ pub fn lz77_optimal<C: Cache>(
     max_iterations_without_improvement: u64,
 ) -> Lz77Store {
     /* Dist to get to here with smallest cost. */
-    let mut currentstore = Lz77Store::new();
-    let mut outputstore = currentstore.clone();
+    let blocksize = inend - instart;
+    let mut currentstore = Lz77Store::with_capacity(blocksize);
+    let mut outputstore = Lz77Store::new();
 
     /* Initial run. */
     currentstore.greedy(lmc, in_data, instart, inend);

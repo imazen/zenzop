@@ -59,6 +59,21 @@ impl Lz77Store {
         }
     }
 
+    /// Creates a new `Lz77Store` with pre-allocated capacity based on block size.
+    /// This avoids repeated Vec growth during `append_store_item`.
+    pub fn with_capacity(blocksize: usize) -> Self {
+        let ll_counts_cap = (blocksize / ZOPFLI_NUM_LL + 1) * ZOPFLI_NUM_LL;
+        let d_counts_cap = (blocksize / ZOPFLI_NUM_D + 1) * ZOPFLI_NUM_D;
+        Self {
+            litlens: Vec::with_capacity(blocksize),
+            pos: Vec::with_capacity(blocksize),
+            ll_symbol: Vec::with_capacity(blocksize),
+            d_symbol: Vec::with_capacity(blocksize),
+            ll_counts: Vec::with_capacity(ll_counts_cap),
+            d_counts: Vec::with_capacity(d_counts_cap),
+        }
+    }
+
     pub fn reset(&mut self) {
         self.litlens.clear();
         self.pos.clear();
