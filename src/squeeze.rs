@@ -18,7 +18,10 @@ use crate::{
     deflate::{calculate_block_size, BlockType},
     hash::ZopfliHash,
     lz77::{find_longest_match, LitLen, Lz77Store},
-    symbols::{get_dist_extra_bits, get_dist_symbol, get_length_extra_bits, get_length_symbol},
+    symbols::{
+        get_dist_extra_bits, get_dist_symbol, get_dist_symbol_extra_bits, get_length_extra_bits,
+        get_length_symbol, get_length_symbol_extra_bits,
+    },
     util::{ZOPFLI_MAX_MATCH, ZOPFLI_NUM_D, ZOPFLI_NUM_LL, ZOPFLI_WINDOW_MASK, ZOPFLI_WINDOW_SIZE},
 };
 
@@ -44,17 +47,52 @@ fn get_cost_fixed(litlen: usize, dist: u16) -> f64 {
     f64::from(result)
 }
 
-/// Cost model based on symbol statistics.
-fn get_cost_stat(litlen: usize, dist: u16, stats: &SymbolStats) -> f64 {
-    assert!(litlen < ZOPFLI_NUM_LL); // Eases inlining and gets rid of index bound checks below
-    if dist == 0 {
-        stats.ll_symbols[litlen]
-    } else {
-        let lsym = get_length_symbol(litlen);
-        let lbits = f64::from(get_length_extra_bits(litlen));
-        let dsym = get_dist_symbol(dist) as usize;
-        let dbits = f64::from(get_dist_extra_bits(dist));
-        lbits + dbits + stats.ll_symbols[lsym] + stats.d_symbols[dsym]
+/// Precomputed cost lookup tables for the stat-based cost model.
+/// Eliminates per-symbol f64 math in the inner DP loop.
+struct CostModel {
+    /// Cost of literal byte i (entropy only).
+    ll_literal: [f32; 256],
+    /// Cost of match length i (entropy + extra bits). Only indices 3..=258 are valid.
+    ll_length: [f32; ZOPFLI_MAX_MATCH + 1],
+    /// Cost of distance symbol d (entropy + extra bits).
+    d_cost: [f32; ZOPFLI_NUM_D],
+}
+
+impl CostModel {
+    fn from_stats(stats: &SymbolStats) -> Self {
+        let mut ll_literal = [0.0f32; 256];
+        for (i, cost) in ll_literal.iter_mut().enumerate() {
+            *cost = stats.ll_symbols[i] as f32;
+        }
+
+        let mut ll_length = [0.0f32; ZOPFLI_MAX_MATCH + 1];
+        for (i, cost) in ll_length.iter_mut().enumerate().skip(3) {
+            let lsym = get_length_symbol(i);
+            *cost =
+                (stats.ll_symbols[lsym] + f64::from(get_length_symbol_extra_bits(lsym))) as f32;
+        }
+
+        let mut d_cost = [0.0f32; ZOPFLI_NUM_D];
+        // Only 30 of 32 dist symbols are used in DEFLATE
+        for (dsym, cost) in d_cost.iter_mut().enumerate().take(30) {
+            *cost = (stats.d_symbols[dsym] + f64::from(get_dist_symbol_extra_bits(dsym))) as f32;
+        }
+
+        Self {
+            ll_literal,
+            ll_length,
+            d_cost,
+        }
+    }
+
+    #[inline(always)]
+    fn cost(&self, litlen: usize, dist: u16) -> f64 {
+        if dist == 0 {
+            f64::from(self.ll_literal[litlen])
+        } else {
+            f64::from(self.ll_length[litlen])
+                + f64::from(self.d_cost[get_dist_symbol(dist) as usize])
+        }
     }
 }
 
@@ -468,12 +506,13 @@ pub fn lz77_optimal<C: Cache>(
     let mut iterations_without_improvement: u64 = 0;
     loop {
         currentstore.reset();
+        let cost_model = CostModel::from_stats(&stats);
         lz77_optimal_run(
             lmc,
             in_data,
             instart,
             inend,
-            |a, b| get_cost_stat(a, b, &stats),
+            |a, b| cost_model.cost(a, b),
             &mut currentstore,
             &mut h,
             &mut costs,
