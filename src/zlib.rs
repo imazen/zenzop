@@ -1,3 +1,5 @@
+use enough::Stop;
+
 use crate::{BlockType, DeflateEncoder, Error, Options, Write};
 
 /// A Zlib encoder powered by the Zopfli algorithm, that compresses data using
@@ -7,8 +9,8 @@ use crate::{BlockType, DeflateEncoder, Error, Options, Write};
 /// The caveats about short writes in [`DeflateEncoder`]s carry over to `ZlibEncoder`s:
 /// for best performance and compression, it is best to avoid them. One way to ensure
 /// this is to use the [`new_buffered`](ZlibEncoder::new_buffered) method.
-pub struct ZlibEncoder<W: Write> {
-    deflate_encoder: Option<DeflateEncoder<W>>,
+pub struct ZlibEncoder<W: Write, S: Stop = enough::Unstoppable> {
+    deflate_encoder: Option<DeflateEncoder<W, S>>,
     adler_hasher: simd_adler32::Adler32,
 }
 
@@ -45,6 +47,45 @@ impl<W: Write> ZlibEncoder<W> {
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
             Self::new(options, btype, sink)?,
         ))
+    }
+}
+
+impl<W: Write, S: Stop> ZlibEncoder<W, S> {
+    /// Creates a new Zlib encoder with cooperative cancellation, wrapped
+    /// with a buffer for decent performance.
+    #[cfg(feature = "std")]
+    pub fn with_stop_buffered(
+        options: Options,
+        btype: BlockType,
+        sink: W,
+        stop: S,
+    ) -> Result<std::io::BufWriter<Self>, Error> {
+        Ok(std::io::BufWriter::with_capacity(
+            crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
+            Self::with_stop(options, btype, sink, stop)?,
+        ))
+    }
+
+    /// Creates a new Zlib encoder with cooperative cancellation support.
+    pub fn with_stop(
+        options: Options,
+        btype: BlockType,
+        mut sink: W,
+        stop: S,
+    ) -> Result<Self, Error> {
+        let cmf = 120; // CM 8, CINFO 7. See zlib spec.
+        let flevel = 3;
+        let fdict = 0;
+        let mut cmfflg: u16 = 256 * cmf + fdict * 32 + flevel * 64;
+        let fcheck = 31 - cmfflg % 31;
+        cmfflg += fcheck;
+
+        sink.write_all(&cmfflg.to_be_bytes())?;
+
+        Ok(Self {
+            deflate_encoder: Some(DeflateEncoder::with_stop(options, btype, sink, stop)),
+            adler_hasher: simd_adler32::Adler32::new(),
+        })
     }
 
     /// Encodes any pending chunks of data and writes them to the sink,
@@ -85,7 +126,7 @@ impl<W: Write> ZlibEncoder<W> {
     }
 }
 
-impl<W: Write> Write for ZlibEncoder<W> {
+impl<W: Write, S: Stop> Write for ZlibEncoder<W, S> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
         self.deflate_encoder
             .as_mut()
@@ -101,7 +142,7 @@ impl<W: Write> Write for ZlibEncoder<W> {
     }
 }
 
-impl<W: Write> Drop for ZlibEncoder<W> {
+impl<W: Write, S: Stop> Drop for ZlibEncoder<W, S> {
     fn drop(&mut self) {
         self.__finish().ok();
     }
@@ -109,7 +150,7 @@ impl<W: Write> Drop for ZlibEncoder<W> {
 
 // Boilerplate to make latest Rustdoc happy: https://github.com/rust-lang/rust/issues/117796
 #[cfg(all(doc, feature = "std"))]
-impl<W: crate::io::Write> std::io::Write for ZlibEncoder<W> {
+impl<W: crate::io::Write, S: Stop> std::io::Write for ZlibEncoder<W, S> {
     fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
         unimplemented!()
     }

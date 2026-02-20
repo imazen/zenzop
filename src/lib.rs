@@ -49,6 +49,7 @@ macro_rules! log_enabled {
 extern crate alloc;
 
 pub use deflate::{BlockType, DeflateEncoder};
+pub use enough::{Stop, StopReason, Unstoppable};
 #[cfg(feature = "gzip")]
 pub use gzip::GzipEncoder;
 #[cfg(all(test, feature = "std"))]
@@ -82,6 +83,22 @@ use std::io::{Error, Write};
 
 #[cfg(any(doc, not(feature = "std")))]
 pub use io::{Error, ErrorKind, Write};
+
+/// Convert a [`StopReason`] into the crate's I/O error type.
+#[cfg(all(not(doc), feature = "std"))]
+fn stop_to_error(reason: StopReason) -> Error {
+    Error::other(match reason {
+        StopReason::Cancelled => "operation cancelled",
+        StopReason::TimedOut => "operation timed out",
+        _ => "operation stopped",
+    })
+}
+
+/// Convert a [`StopReason`] into the crate's I/O error type.
+#[cfg(any(doc, not(feature = "std")))]
+fn stop_to_error(_reason: StopReason) -> Error {
+    io::ErrorKind::Cancelled.into()
+}
 
 /// Options for the Zopfli compression algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -156,27 +173,44 @@ pub enum Format {
 pub fn compress<R: std::io::Read, W: Write>(
     options: Options,
     output_format: Format,
+    in_data: R,
+    out: W,
+) -> Result<(), Error> {
+    compress_with_stop(options, output_format, in_data, out, Unstoppable)
+}
+
+/// Like [`compress`], but with cooperative cancellation support.
+///
+/// The `stop` token is checked at each squeeze iteration boundary. If the token
+/// signals cancellation, compression is aborted and an I/O error is returned.
+#[cfg(feature = "std")]
+pub fn compress_with_stop<R: std::io::Read, W: Write>(
+    options: Options,
+    output_format: Format,
     mut in_data: R,
     out: W,
+    stop: impl Stop,
 ) -> Result<(), Error> {
     match output_format {
         #[cfg(feature = "gzip")]
         Format::Gzip => {
-            let mut gzip_encoder = GzipEncoder::new_buffered(options, BlockType::Dynamic, out)?;
-            std::io::copy(&mut in_data, &mut gzip_encoder)?;
-            gzip_encoder.into_inner()?.finish().map(|_| ())
+            let mut encoder =
+                GzipEncoder::with_stop_buffered(options, BlockType::Dynamic, out, stop)?;
+            std::io::copy(&mut in_data, &mut encoder)?;
+            encoder.into_inner()?.finish().map(|_| ())
         }
         #[cfg(feature = "zlib")]
         Format::Zlib => {
-            let mut zlib_encoder = ZlibEncoder::new_buffered(options, BlockType::Dynamic, out)?;
-            std::io::copy(&mut in_data, &mut zlib_encoder)?;
-            zlib_encoder.into_inner()?.finish().map(|_| ())
+            let mut encoder =
+                ZlibEncoder::with_stop_buffered(options, BlockType::Dynamic, out, stop)?;
+            std::io::copy(&mut in_data, &mut encoder)?;
+            encoder.into_inner()?.finish().map(|_| ())
         }
         Format::Deflate => {
-            let mut deflate_encoder =
-                DeflateEncoder::new_buffered(options, BlockType::Dynamic, out);
-            std::io::copy(&mut in_data, &mut deflate_encoder)?;
-            deflate_encoder.into_inner()?.finish().map(|_| ())
+            let mut encoder =
+                DeflateEncoder::with_stop_buffered(options, BlockType::Dynamic, out, stop);
+            std::io::copy(&mut in_data, &mut encoder)?;
+            encoder.into_inner()?.finish().map(|_| ())
         }
     }
 }

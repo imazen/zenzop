@@ -1,3 +1,5 @@
+use enough::Stop;
+
 use crate::{BlockType, DeflateEncoder, Error, Options, Write};
 
 /// A Gzip encoder powered by the Zopfli algorithm, that compresses data using
@@ -7,8 +9,8 @@ use crate::{BlockType, DeflateEncoder, Error, Options, Write};
 /// The caveats about short writes in [`DeflateEncoder`]s carry over to `GzipEncoder`s:
 /// for best performance and compression, it is best to avoid them. One way to ensure
 /// this is to use the [`new_buffered`](GzipEncoder::new_buffered) method.
-pub struct GzipEncoder<W: Write> {
-    deflate_encoder: Option<DeflateEncoder<W>>,
+pub struct GzipEncoder<W: Write, S: Stop = enough::Unstoppable> {
+    deflate_encoder: Option<DeflateEncoder<W, S>>,
     crc32_hasher: crc32fast::Hasher,
     input_size: u32,
 }
@@ -51,6 +53,49 @@ impl<W: Write> GzipEncoder<W> {
             Self::new(options, btype, sink)?,
         ))
     }
+}
+
+impl<W: Write, S: Stop> GzipEncoder<W, S> {
+    /// Creates a new Gzip encoder with cooperative cancellation, wrapped
+    /// with a buffer for decent performance.
+    #[cfg(feature = "std")]
+    pub fn with_stop_buffered(
+        options: Options,
+        btype: BlockType,
+        sink: W,
+        stop: S,
+    ) -> Result<std::io::BufWriter<Self>, Error> {
+        Ok(std::io::BufWriter::with_capacity(
+            crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
+            Self::with_stop(options, btype, sink, stop)?,
+        ))
+    }
+
+    /// Creates a new Gzip encoder with cooperative cancellation support.
+    pub fn with_stop(
+        options: Options,
+        btype: BlockType,
+        mut sink: W,
+        stop: S,
+    ) -> Result<Self, Error> {
+        static HEADER: &[u8] = &[
+            31,  // ID1
+            139, // ID2
+            8,   // CM
+            0,   // FLG
+            0,   // MTIME
+            0, 0, 0, 2, // XFL, 2 indicates best compression.
+            3, // OS follows Unix conventions.
+        ];
+
+        sink.write_all(HEADER)?;
+
+        Ok(Self {
+            deflate_encoder: Some(DeflateEncoder::with_stop(options, btype, sink, stop)),
+            crc32_hasher: crc32fast::Hasher::new(),
+            input_size: 0,
+        })
+    }
 
     /// Encodes any pending chunks of data and writes them to the sink,
     /// consuming the encoder and returning the wrapped sink. The sink
@@ -91,7 +136,7 @@ impl<W: Write> GzipEncoder<W> {
     }
 }
 
-impl<W: Write> Write for GzipEncoder<W> {
+impl<W: Write, S: Stop> Write for GzipEncoder<W, S> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
         self.deflate_encoder
             .as_mut()
@@ -108,7 +153,7 @@ impl<W: Write> Write for GzipEncoder<W> {
     }
 }
 
-impl<W: Write> Drop for GzipEncoder<W> {
+impl<W: Write, S: Stop> Drop for GzipEncoder<W, S> {
     fn drop(&mut self) {
         self.__finish().ok();
     }
@@ -116,7 +161,7 @@ impl<W: Write> Drop for GzipEncoder<W> {
 
 // Boilerplate to make latest Rustdoc happy: https://github.com/rust-lang/rust/issues/117796
 #[cfg(all(doc, feature = "std"))]
-impl<W: crate::io::Write> std::io::Write for GzipEncoder<W> {
+impl<W: crate::io::Write, S: Stop> std::io::Write for GzipEncoder<W, S> {
     fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
         unimplemented!()
     }

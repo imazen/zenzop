@@ -4,6 +4,8 @@ use core::{cmp, iter};
 #[cfg(feature = "std")]
 use log::{debug, log_enabled};
 
+use enough::Stop;
+
 use crate::{
     blocksplitter::{blocksplit, blocksplit_lz77},
     cache::ZopfliLongestMatchCache,
@@ -11,6 +13,7 @@ use crate::{
     katajainen::{length_limited_code_lengths, length_limited_code_lengths_into, HuffmanScratch},
     lz77::{LitLen, Lz77Store},
     squeeze::{lz77_optimal, lz77_optimal_fixed},
+    stop_to_error,
     symbols::{
         get_dist_extra_bits, get_dist_extra_bits_value, get_dist_symbol,
         get_dist_symbol_extra_bits, get_length_extra_bits, get_length_extra_bits_value,
@@ -33,13 +36,14 @@ use crate::{
 /// by the [`new_buffered`](DeflateEncoder::new_buffered) method. An adequate write size
 /// would be >32 KiB, which allows the second complete chunk to leverage a full-sized
 /// backreference window.
-pub struct DeflateEncoder<W: Write> {
+pub struct DeflateEncoder<W: Write, S: Stop = enough::Unstoppable> {
     options: Options,
     btype: BlockType,
     have_chunk: bool,
     chunk_start: usize,
     window_and_chunk: Vec<u8>,
     bitwise_writer: Option<BitwiseWriter<W>>,
+    stop: S,
 }
 
 impl<W: Write> DeflateEncoder<W> {
@@ -53,6 +57,7 @@ impl<W: Write> DeflateEncoder<W> {
             chunk_start: 0,
             window_and_chunk: Vec::with_capacity(ZOPFLI_WINDOW_SIZE),
             bitwise_writer: Some(BitwiseWriter::new(sink)),
+            stop: enough::Unstoppable,
         }
     }
 
@@ -65,6 +70,39 @@ impl<W: Write> DeflateEncoder<W> {
         std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
             Self::new(options, btype, sink),
+        )
+    }
+}
+
+impl<W: Write, S: Stop> DeflateEncoder<W, S> {
+    /// Creates a new Zopfli DEFLATE encoder with cooperative cancellation support.
+    ///
+    /// The `stop` token is checked at each squeeze iteration boundary.
+    /// Use [`enough::Unstoppable`] for zero-cost no-op cancellation.
+    pub fn with_stop(options: Options, btype: BlockType, sink: W, stop: S) -> Self {
+        Self {
+            options,
+            btype,
+            have_chunk: false,
+            chunk_start: 0,
+            window_and_chunk: Vec::with_capacity(ZOPFLI_WINDOW_SIZE),
+            bitwise_writer: Some(BitwiseWriter::new(sink)),
+            stop,
+        }
+    }
+
+    /// Creates a new Zopfli DEFLATE encoder with cooperative cancellation,
+    /// wrapped with a buffer for decent performance.
+    #[cfg(feature = "std")]
+    pub fn with_stop_buffered(
+        options: Options,
+        btype: BlockType,
+        sink: W,
+        stop: S,
+    ) -> std::io::BufWriter<Self> {
+        std::io::BufWriter::with_capacity(
+            crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
+            Self::with_stop(options, btype, sink, stop),
         )
     }
 
@@ -93,6 +131,7 @@ impl<W: Write> DeflateEncoder<W> {
             self.chunk_start,
             self.window_and_chunk.len(),
             self.bitwise_writer.as_mut().unwrap(),
+            &self.stop,
         )
     }
 
@@ -149,7 +188,7 @@ impl<W: Write> DeflateEncoder<W> {
     }
 }
 
-impl<W: Write> Write for DeflateEncoder<W> {
+impl<W: Write, S: Stop> Write for DeflateEncoder<W, S> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
         // Any previous chunk is known to be non-last at this point,
         // so compress it now
@@ -169,7 +208,7 @@ impl<W: Write> Write for DeflateEncoder<W> {
     }
 }
 
-impl<W: Write> Drop for DeflateEncoder<W> {
+impl<W: Write, S: Stop> Drop for DeflateEncoder<W, S> {
     fn drop(&mut self) {
         self.__finish().ok();
     }
@@ -177,7 +216,7 @@ impl<W: Write> Drop for DeflateEncoder<W> {
 
 // Boilerplate to make latest Rustdoc happy: https://github.com/rust-lang/rust/issues/117796
 #[cfg(all(doc, feature = "std"))]
-impl<W: crate::io::Write> std::io::Write for DeflateEncoder<W> {
+impl<W: crate::io::Write, S: Stop> std::io::Write for DeflateEncoder<W, S> {
     fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
         unimplemented!()
     }
@@ -196,6 +235,7 @@ impl<W: crate::io::Write> std::io::Write for DeflateEncoder<W> {
 /// Like deflate, but allows to specify start and end byte with instart and
 /// inend. Only that part is compressed, but earlier bytes are still used for the
 /// back window.
+#[allow(clippy::too_many_arguments)]
 fn deflate_part<W: Write>(
     options: &Options,
     btype: BlockType,
@@ -204,6 +244,7 @@ fn deflate_part<W: Write>(
     instart: usize,
     inend: usize,
     bitwise_writer: &mut BitwiseWriter<W>,
+    stop: &dyn Stop,
 ) -> Result<(), Error> {
     /* If btype=Dynamic is specified, it tries all block types. If a lesser btype is
     given, then however it forces that one. Neither of the lesser types needs
@@ -240,6 +281,7 @@ fn deflate_part<W: Write>(
             instart,
             inend,
             bitwise_writer,
+            stop,
         ),
     }
 }
@@ -1244,6 +1286,7 @@ fn blocksplit_attempt<W: Write>(
     instart: usize,
     inend: usize,
     bitwise_writer: &mut BitwiseWriter<W>,
+    stop: &dyn Stop,
 ) -> Result<(), Error> {
     let mut totalcost = 0.0;
     let mut lz77 = Lz77Store::with_capacity(inend - instart);
@@ -1278,6 +1321,7 @@ fn blocksplit_attempt<W: Write>(
             end,
             options.iteration_count.get(),
             options.iterations_without_improvement.get(),
+            stop,
         )
     };
 
@@ -1285,10 +1329,18 @@ fn blocksplit_attempt<W: Write>(
     #[cfg(feature = "parallel")]
     let stores: Vec<Lz77Store> = {
         use rayon::prelude::*;
-        ranges.par_iter().map(compress_range).collect()
+        ranges
+            .par_iter()
+            .map(compress_range)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(stop_to_error)?
     };
     #[cfg(not(feature = "parallel"))]
-    let stores: Vec<Lz77Store> = ranges.iter().map(compress_range).collect();
+    let stores: Vec<Lz77Store> = ranges
+        .iter()
+        .map(compress_range)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(stop_to_error)?;
 
     let mut scratch = HuffmanScratch::new();
 

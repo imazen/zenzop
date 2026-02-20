@@ -180,6 +180,14 @@ impl From<ErrorKind> for Error {
     }
 }
 
+impl From<enough::StopReason> for Error {
+    fn from(_: enough::StopReason) -> Self {
+        Self {
+            kind: ErrorKind::Cancelled,
+        }
+    }
+}
+
 #[cfg(feature = "nightly")]
 impl core::error::Error for Error {}
 
@@ -206,6 +214,8 @@ pub enum ErrorKind {
     /// [`write`]: Write::write
     /// [`Ok(0)`]: Ok
     WriteZero,
+    /// The operation was cancelled or timed out via cooperative cancellation.
+    Cancelled,
     /// An error that does not fall under any other I/O error kind.
     Other,
 }

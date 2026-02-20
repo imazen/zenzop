@@ -13,6 +13,8 @@ use core::cmp;
 #[cfg(feature = "std")]
 use log::{debug, trace};
 
+use enough::{Stop, StopReason};
+
 use crate::{
     cache::Cache,
     deflate::{calculate_block_size, BlockType},
@@ -501,7 +503,8 @@ pub fn lz77_optimal<C: Cache>(
     inend: usize,
     max_iterations: u64,
     max_iterations_without_improvement: u64,
-) -> Lz77Store {
+    stop: &dyn Stop,
+) -> Result<Lz77Store, StopReason> {
     /* Dist to get to here with smallest cost. */
     let blocksize = inend - instart;
     let mut currentstore = Lz77Store::with_capacity(blocksize);
@@ -533,6 +536,7 @@ pub fn lz77_optimal<C: Cache>(
     let mut current_iteration: u64 = 0;
     let mut iterations_without_improvement: u64 = 0;
     loop {
+        stop.check()?;
         currentstore.reset();
         let cost_model = CostModel::from_stats(&stats);
         lz77_optimal_run(
@@ -587,5 +591,5 @@ pub fn lz77_optimal<C: Cache>(
         }
         lastcost = cost;
     }
-    outputstore
+    Ok(outputstore)
 }
