@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![deny(trivial_casts, trivial_numeric_casts, missing_docs)]
 
 //! A faster fork of the [Zopfli](https://github.com/google/zopfli) compression library.
