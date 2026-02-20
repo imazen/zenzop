@@ -8,16 +8,16 @@ use std::{
 use log::info;
 
 fn main() {
-    let options = zopfli::Options::default();
-    let output_type = zopfli::Format::Gzip;
+    let options = zenzop::Options::default();
+    let output_type = zenzop::Format::Gzip;
 
     // TODO: CLI arguments
     // TODO: Allow specifying output to STDOUT
 
     let extension = match output_type {
-        zopfli::Format::Gzip => ".gz",
-        zopfli::Format::Zlib => ".zlib",
-        zopfli::Format::Deflate => ".deflate",
+        zenzop::Format::Gzip => ".gz",
+        zenzop::Format::Zlib => ".zlib",
+        zenzop::Format::Deflate => ".deflate",
     };
 
     for filename in env::args().skip(1) {
@@ -32,7 +32,7 @@ fn main() {
             .unwrap_or_else(|why| panic!("couldn't create output file {out_filename}: {why}"));
         let mut out_file = WriteStatistics::new(out_file);
 
-        zopfli::compress(options, output_type, &file, &mut out_file)
+        zenzop::compress(options, output_type, &file, &mut out_file)
             .unwrap_or_else(|why| panic!("couldn't write to output file {out_filename}: {why}"));
 
         let out_size = out_file.count;

@@ -1,11 +1,11 @@
 #![deny(trivial_casts, trivial_numeric_casts, missing_docs)]
 
-//! A reimplementation of the [Zopfli](https://github.com/google/zopfli) compression library in Rust.
+//! A faster fork of the [Zopfli](https://github.com/google/zopfli) compression library.
 //!
 //! Zopfli is a state of the art DEFLATE compressor that heavily prioritizes compression over speed.
-//! It usually compresses much better than other DEFLATE compressors, generating standard DEFLATE
-//! streams that can be decompressed with any DEFLATE decompressor, at the cost of being
-//! significantly slower.
+//! zenzop produces identical output to zopfli but runs 2-3x faster through algorithmic
+//! improvements: eliminating redundant hash chain walks, precomputed cost tables, and a buffered
+//! bit writer.
 //!
 //! # Features
 //!

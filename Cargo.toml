@@ -1,14 +1,12 @@
 [package]
-name = "zopfli"
-version = "0.8.3"
+name = "zenzop"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.82.0"
-description = "A Rust implementation of the Zopfli compression algorithm."
+description = "A faster fork of the Zopfli DEFLATE compressor. Drop-in replacement with identical output."
 readme = "README.md"
-homepage = "https://github.com/zopfli-rs/zopfli"
-repository = "https://github.com/zopfli-rs/zopfli"
 license = "Apache-2.0"
-keywords = ["compression"]
+keywords = ["compression", "deflate", "zopfli"]
 categories = ["compression", "no-std"]
 exclude = [
   ".github/*",
@@ -25,7 +23,7 @@ exclude = [
 cargo-args = ["--all-features"]
 
 [[bin]]
-name = "zopfli"
+name = "zenzop"
 required-features = ["gzip", "std", "zlib"]
 
 [dependencies]
@@ -35,9 +33,14 @@ log = { version = "0.4.28", optional = true }
 simd-adler32 = { version = "0.3.7", default-features = false, optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 miniz_oxide = "0.8.9"
 proptest = "1.7.0"
 proptest-derive = "0.7.0"
+
+[[bench]]
+name = "compress"
+harness = false
 
 [features]
 default = ["gzip", "std", "zlib"]
@@ -47,6 +50,7 @@ std = ["crc32fast?/std", "dep:log", "simd-adler32?/std"]
 zlib = ["dep:simd-adler32"]
 
 [profile.release]
-# Generate full debug information for release builds anyway for ease of profiling.
-# This does not affect packages that depend on the Zopfli library package
+debug = true
+
+[profile.bench]
 debug = true

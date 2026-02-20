@@ -7,7 +7,7 @@ rm -f test/data/*.gz
 # Test all input cases individually so we can report which failed
 for input in test/data/*; do
 	printf "Compressing ${input}... "
-	RUST_BACKTRACE=1 target/release/zopfli ${input}
+	RUST_BACKTRACE=1 target/release/zenzop ${input}
 	echo "done"
 done
 
