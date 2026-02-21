@@ -50,7 +50,6 @@ use std::io::{self, Write};
 fn main() -> io::Result<()> {
     let mut encoder = zenzop::DeflateEncoder::new_buffered(
         zenzop::Options::default(),
-        zenzop::BlockType::Dynamic,
         Vec::new(),
     );
     encoder.write_all(b"Hello, world!")?;
@@ -67,7 +66,6 @@ use std::io::{self, Write};
 fn compress_cancellable(data: &[u8], stop: impl zenzop::Stop) -> io::Result<Vec<u8>> {
     let mut encoder = zenzop::GzipEncoder::with_stop_buffered(
         zenzop::Options::default(),
-        zenzop::BlockType::Dynamic,
         Vec::new(),
         stop,
     )?;

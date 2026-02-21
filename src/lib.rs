@@ -21,10 +21,7 @@
 //!   the crate exposes minimalist versions of the `std` I/O traits it needs to function, allowing users
 //!   to implement them.
 //! - `nightly`: enables code constructs and features specific to the nightly Rust toolchain. Currently,
-//!   this feature improves rustdoc generation and enables the namesake feature on `crc32fast`, but this
-//!   may change in the future. This feature also used to enable `simd-adler32`'s namesake feature, but
-//!   it no longer does as the latest `simd-adler32` release does not build with the latest nightlies
-//!   (as of 2024-05-18) when that feature is enabled.
+//!   this feature improves rustdoc generation.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(feature = "nightly", feature(doc_cfg))]
@@ -127,6 +124,14 @@ pub struct Options {
     ///
     /// Default value: 15.
     pub maximum_block_splits: u16,
+    /// The type of DEFLATE blocks to generate.
+    ///
+    /// [`Dynamic`](BlockType::Dynamic) (the default) lets the algorithm choose the
+    /// most space-efficient block types automatically. Use other variants only for
+    /// testing or specialized scenarios.
+    ///
+    /// Default value: [`BlockType::Dynamic`].
+    pub block_type: BlockType,
 }
 
 impl Default for Options {
@@ -135,6 +140,7 @@ impl Default for Options {
             iteration_count: NonZeroU64::new(15).unwrap(),
             iterations_without_improvement: NonZeroU64::new(u64::MAX).unwrap(),
             maximum_block_splits: 15,
+            block_type: BlockType::Dynamic,
         }
     }
 }
@@ -179,18 +185,18 @@ pub fn compress<R: std::io::Read, W: Write>(
     match output_format {
         #[cfg(feature = "gzip")]
         Format::Gzip => {
-            let mut encoder = GzipEncoder::new_buffered(options, BlockType::Dynamic, out)?;
+            let mut encoder = GzipEncoder::new_buffered(options, out)?;
             std::io::copy(&mut in_data, &mut encoder)?;
             encoder.into_inner()?.finish().map(|_| ())
         }
         #[cfg(feature = "zlib")]
         Format::Zlib => {
-            let mut encoder = ZlibEncoder::new_buffered(options, BlockType::Dynamic, out)?;
+            let mut encoder = ZlibEncoder::new_buffered(options, out)?;
             std::io::copy(&mut in_data, &mut encoder)?;
             encoder.into_inner()?.finish().map(|_| ())
         }
         Format::Deflate => {
-            let mut encoder = DeflateEncoder::new_buffered(options, BlockType::Dynamic, out);
+            let mut encoder = DeflateEncoder::new_buffered(options, out);
             std::io::copy(&mut in_data, &mut encoder)?;
             encoder.into_inner()?.finish().map(|_| ())
         }
@@ -210,12 +216,11 @@ mod test {
         #[test]
         fn deflating_is_reversible(
             options: Options,
-            btype: BlockType,
             data in prop::collection::vec(any::<u8>(), 0..64 * 1024)
         ) {
             let mut compressed_data = Vec::with_capacity(data.len());
 
-            let mut encoder = DeflateEncoder::new(options, btype, &mut compressed_data);
+            let mut encoder = DeflateEncoder::new(options, &mut compressed_data);
             io::copy(&mut &*data, &mut encoder).unwrap();
             encoder.finish().unwrap();
 

@@ -1,6 +1,6 @@
 use enough::Stop;
 
-use crate::{BlockType, CompressResult, DeflateEncoder, Error, Options, Write};
+use crate::{CompressResult, DeflateEncoder, Error, Options, Write};
 
 /// A Zlib encoder powered by the Zopfli algorithm, that compresses data using
 /// a [`DeflateEncoder`]. Most users will find using [`compress`](crate::compress)
@@ -11,13 +11,13 @@ use crate::{BlockType, CompressResult, DeflateEncoder, Error, Options, Write};
 /// this is to use the [`new_buffered`](ZlibEncoder::new_buffered) method.
 pub struct ZlibEncoder<W: Write, S: Stop = enough::Unstoppable> {
     deflate_encoder: Option<DeflateEncoder<W, S>>,
-    adler_hasher: simd_adler32::Adler32,
+    adler_hasher: zenflate::Adler32Hasher,
 }
 
 impl<W: Write> ZlibEncoder<W> {
     /// Creates a new Zlib encoder that will operate according to the
     /// specified options.
-    pub fn new(options: Options, btype: BlockType, mut sink: W) -> Result<Self, Error> {
+    pub fn new(options: Options, mut sink: W) -> Result<Self, Error> {
         let cmf = 120; // CM 8, CINFO 7. See zlib spec.
         let flevel = 3;
         let fdict = 0;
@@ -28,8 +28,8 @@ impl<W: Write> ZlibEncoder<W> {
         sink.write_all(&cmfflg.to_be_bytes())?;
 
         Ok(Self {
-            deflate_encoder: Some(DeflateEncoder::new(options, btype, sink)),
-            adler_hasher: simd_adler32::Adler32::new(),
+            deflate_encoder: Some(DeflateEncoder::new(options, sink)),
+            adler_hasher: zenflate::Adler32Hasher::new(),
         })
     }
 
@@ -40,12 +40,11 @@ impl<W: Write> ZlibEncoder<W> {
     #[cfg(feature = "std")]
     pub fn new_buffered(
         options: Options,
-        btype: BlockType,
         sink: W,
     ) -> Result<std::io::BufWriter<Self>, Error> {
         Ok(std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
-            Self::new(options, btype, sink)?,
+            Self::new(options, sink)?,
         ))
     }
 }
@@ -56,20 +55,18 @@ impl<W: Write, S: Stop> ZlibEncoder<W, S> {
     #[cfg(feature = "std")]
     pub fn with_stop_buffered(
         options: Options,
-        btype: BlockType,
         sink: W,
         stop: S,
     ) -> Result<std::io::BufWriter<Self>, Error> {
         Ok(std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
-            Self::with_stop(options, btype, sink, stop)?,
+            Self::with_stop(options, sink, stop)?,
         ))
     }
 
     /// Creates a new Zlib encoder with cooperative cancellation support.
     pub fn with_stop(
         options: Options,
-        btype: BlockType,
         mut sink: W,
         stop: S,
     ) -> Result<Self, Error> {
@@ -83,8 +80,8 @@ impl<W: Write, S: Stop> ZlibEncoder<W, S> {
         sink.write_all(&cmfflg.to_be_bytes())?;
 
         Ok(Self {
-            deflate_encoder: Some(DeflateEncoder::with_stop(options, btype, sink, stop)),
-            adler_hasher: simd_adler32::Adler32::new(),
+            deflate_encoder: Some(DeflateEncoder::with_stop(options, sink, stop)),
+            adler_hasher: zenflate::Adler32Hasher::new(),
         })
     }
 

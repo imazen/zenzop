@@ -29,10 +29,9 @@ required-features = ["gzip", "std", "zlib"]
 
 [dependencies]
 enough = { version = "0.4", default-features = false }
-crc32fast = { version = "1.5.0", default-features = false, optional = true }
 log = { version = "0.4.28", optional = true }
 rayon = { version = "1.10", optional = true }
-simd-adler32 = { version = "0.3.7", default-features = false, optional = true }
+zenflate = { path = "../zenflate", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -47,11 +46,11 @@ harness = false
 
 [features]
 default = ["gzip", "std", "zlib"]
-gzip = ["dep:crc32fast"]
-nightly = ["crc32fast?/nightly"]
+gzip = ["dep:zenflate"]
+nightly = []
 parallel = ["dep:rayon", "std"]
-std = ["crc32fast?/std", "dep:log", "simd-adler32?/std"]
-zlib = ["dep:simd-adler32"]
+std = ["dep:log", "zenflate?/std"]
+zlib = ["dep:zenflate"]
 
 [profile.release]
 debug = true

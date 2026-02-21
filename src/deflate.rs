@@ -62,7 +62,6 @@ impl<W> CompressResult<W> {
 /// backreference window.
 pub struct DeflateEncoder<W: Write, S: Stop = enough::Unstoppable> {
     options: Options,
-    btype: BlockType,
     have_chunk: bool,
     chunk_start: usize,
     window_and_chunk: Vec<u8>,
@@ -74,10 +73,9 @@ pub struct DeflateEncoder<W: Write, S: Stop = enough::Unstoppable> {
 impl<W: Write> DeflateEncoder<W> {
     /// Creates a new Zopfli DEFLATE encoder that will operate according to the
     /// specified options.
-    pub fn new(options: Options, btype: BlockType, sink: W) -> Self {
+    pub fn new(options: Options, sink: W) -> Self {
         Self {
             options,
-            btype,
             have_chunk: false,
             chunk_start: 0,
             window_and_chunk: Vec::with_capacity(ZOPFLI_WINDOW_SIZE),
@@ -92,10 +90,10 @@ impl<W: Write> DeflateEncoder<W> {
     /// data is compressed in large chunks, which is necessary for decent
     /// performance and good compression ratio.
     #[cfg(feature = "std")]
-    pub fn new_buffered(options: Options, btype: BlockType, sink: W) -> std::io::BufWriter<Self> {
+    pub fn new_buffered(options: Options, sink: W) -> std::io::BufWriter<Self> {
         std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
-            Self::new(options, btype, sink),
+            Self::new(options, sink),
         )
     }
 }
@@ -105,10 +103,9 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
     ///
     /// The `stop` token is checked at each squeeze iteration boundary.
     /// Use [`enough::Unstoppable`] for zero-cost no-op cancellation.
-    pub fn with_stop(options: Options, btype: BlockType, sink: W, stop: S) -> Self {
+    pub fn with_stop(options: Options, sink: W, stop: S) -> Self {
         Self {
             options,
-            btype,
             have_chunk: false,
             chunk_start: 0,
             window_and_chunk: Vec::with_capacity(ZOPFLI_WINDOW_SIZE),
@@ -123,13 +120,12 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
     #[cfg(feature = "std")]
     pub fn with_stop_buffered(
         options: Options,
-        btype: BlockType,
         sink: W,
         stop: S,
     ) -> std::io::BufWriter<Self> {
         std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
-            Self::with_stop(options, btype, sink, stop),
+            Self::with_stop(options, sink, stop),
         )
     }
 
@@ -155,7 +151,7 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
     fn compress_chunk(&mut self, is_last: bool) -> Result<(), Error> {
         let fo = deflate_part(
             &self.options,
-            self.btype,
+            self.options.block_type,
             is_last,
             &self.window_and_chunk,
             self.chunk_start,
@@ -321,7 +317,7 @@ fn deflate_part<W: Write>(
 }
 
 /// The type of data blocks to generate for a DEFLATE stream.
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Debug)]
 #[cfg_attr(all(test, feature = "std"), derive(proptest_derive::Arbitrary))]
 #[derive(Default)]
 pub enum BlockType {
@@ -1590,8 +1586,7 @@ mod test {
         let mut compressed_data = vec![];
 
         let default_options = Options::default();
-        let mut encoder =
-            DeflateEncoder::new(default_options, BlockType::default(), &mut compressed_data);
+        let mut encoder = DeflateEncoder::new(default_options, &mut compressed_data);
 
         encoder.write_all(&[0]).unwrap();
         encoder.write_all(&[]).unwrap();

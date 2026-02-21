@@ -1,6 +1,6 @@
 use enough::Stop;
 
-use crate::{BlockType, CompressResult, DeflateEncoder, Error, Options, Write};
+use crate::{CompressResult, DeflateEncoder, Error, Options, Write};
 
 /// A Gzip encoder powered by the Zopfli algorithm, that compresses data using
 /// a [`DeflateEncoder`]. Most users will find using [`compress`](crate::compress)
@@ -11,14 +11,14 @@ use crate::{BlockType, CompressResult, DeflateEncoder, Error, Options, Write};
 /// this is to use the [`new_buffered`](GzipEncoder::new_buffered) method.
 pub struct GzipEncoder<W: Write, S: Stop = enough::Unstoppable> {
     deflate_encoder: Option<DeflateEncoder<W, S>>,
-    crc32_hasher: crc32fast::Hasher,
+    crc32_hasher: zenflate::Crc32Hasher,
     input_size: u32,
 }
 
 impl<W: Write> GzipEncoder<W> {
     /// Creates a new Gzip encoder that will operate according to the
     /// specified options.
-    pub fn new(options: Options, btype: BlockType, mut sink: W) -> Result<Self, Error> {
+    pub fn new(options: Options, mut sink: W) -> Result<Self, Error> {
         static HEADER: &[u8] = &[
             31,  // ID1
             139, // ID2
@@ -32,8 +32,8 @@ impl<W: Write> GzipEncoder<W> {
         sink.write_all(HEADER)?;
 
         Ok(Self {
-            deflate_encoder: Some(DeflateEncoder::new(options, btype, sink)),
-            crc32_hasher: crc32fast::Hasher::new(),
+            deflate_encoder: Some(DeflateEncoder::new(options, sink)),
+            crc32_hasher: zenflate::Crc32Hasher::new(),
             input_size: 0,
         })
     }
@@ -45,12 +45,11 @@ impl<W: Write> GzipEncoder<W> {
     #[cfg(feature = "std")]
     pub fn new_buffered(
         options: Options,
-        btype: BlockType,
         sink: W,
     ) -> Result<std::io::BufWriter<Self>, Error> {
         Ok(std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
-            Self::new(options, btype, sink)?,
+            Self::new(options, sink)?,
         ))
     }
 }
@@ -61,20 +60,18 @@ impl<W: Write, S: Stop> GzipEncoder<W, S> {
     #[cfg(feature = "std")]
     pub fn with_stop_buffered(
         options: Options,
-        btype: BlockType,
         sink: W,
         stop: S,
     ) -> Result<std::io::BufWriter<Self>, Error> {
         Ok(std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
-            Self::with_stop(options, btype, sink, stop)?,
+            Self::with_stop(options, sink, stop)?,
         ))
     }
 
     /// Creates a new Gzip encoder with cooperative cancellation support.
     pub fn with_stop(
         options: Options,
-        btype: BlockType,
         mut sink: W,
         stop: S,
     ) -> Result<Self, Error> {
@@ -91,8 +88,8 @@ impl<W: Write, S: Stop> GzipEncoder<W, S> {
         sink.write_all(HEADER)?;
 
         Ok(Self {
-            deflate_encoder: Some(DeflateEncoder::with_stop(options, btype, sink, stop)),
-            crc32_hasher: crc32fast::Hasher::new(),
+            deflate_encoder: Some(DeflateEncoder::with_stop(options, sink, stop)),
+            crc32_hasher: zenflate::Crc32Hasher::new(),
             input_size: 0,
         })
     }
@@ -118,7 +115,7 @@ impl<W: Write, S: Stop> GzipEncoder<W, S> {
 
         result
             .inner
-            .write_all(&self.crc32_hasher.clone().finalize().to_le_bytes())?;
+            .write_all(&self.crc32_hasher.finalize().to_le_bytes())?;
         result.inner.write_all(&self.input_size.to_le_bytes())?;
 
         Ok(Some(result))
