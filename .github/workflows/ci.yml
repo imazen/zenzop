@@ -73,9 +73,9 @@ jobs:
             toolchain: stable
 
           # ── MSRV check ──
-          - name: MSRV (1.82)
+          - name: MSRV (1.85)
             runner: ubuntu-latest
-            toolchain: "1.82.0"
+            toolchain: "1.85.0"
 
     runs-on: ${{ matrix.runner }}
     steps:
