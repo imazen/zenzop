@@ -7,10 +7,11 @@ use log::{debug, log_enabled};
 use enough::Stop;
 
 use crate::{
+    Error, Options, Write,
     blocksplitter::{blocksplit, blocksplit_lz77},
     cache::ZopfliLongestMatchCache,
     iter::ToFlagLastIterator,
-    katajainen::{length_limited_code_lengths, length_limited_code_lengths_into, HuffmanScratch},
+    katajainen::{HuffmanScratch, length_limited_code_lengths, length_limited_code_lengths_into},
     lz77::{LitLen, Lz77Store},
     squeeze::{lz77_optimal, lz77_optimal_fixed},
     stop_to_error,
@@ -21,7 +22,6 @@ use crate::{
     },
     tree::lengths_to_symbols,
     util::{ZOPFLI_NUM_D, ZOPFLI_NUM_LL, ZOPFLI_WINDOW_SIZE},
-    Error, Options, Write,
 };
 
 /// The result of a compression operation.
@@ -118,11 +118,7 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
     /// Creates a new Zopfli DEFLATE encoder with cooperative cancellation,
     /// wrapped with a buffer for decent performance.
     #[cfg(feature = "std")]
-    pub fn with_stop_buffered(
-        options: Options,
-        sink: W,
-        stop: S,
-    ) -> std::io::BufWriter<Self> {
+    pub fn with_stop_buffered(options: Options, sink: W, stop: S) -> std::io::BufWriter<Self> {
         std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
             Self::with_stop(options, sink, stop),

@@ -43,10 +43,7 @@ impl<W: Write> GzipEncoder<W> {
     /// compressed in large chunks, which is necessary for decent performance
     /// and good compression ratio.
     #[cfg(feature = "std")]
-    pub fn new_buffered(
-        options: Options,
-        sink: W,
-    ) -> Result<std::io::BufWriter<Self>, Error> {
+    pub fn new_buffered(options: Options, sink: W) -> Result<std::io::BufWriter<Self>, Error> {
         Ok(std::io::BufWriter::with_capacity(
             crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
             Self::new(options, sink)?,
@@ -70,11 +67,7 @@ impl<W: Write, S: Stop> GzipEncoder<W, S> {
     }
 
     /// Creates a new Gzip encoder with cooperative cancellation support.
-    pub fn with_stop(
-        options: Options,
-        mut sink: W,
-        stop: S,
-    ) -> Result<Self, Error> {
+    pub fn with_stop(options: Options, mut sink: W, stop: S) -> Result<Self, Error> {
         static HEADER: &[u8] = &[
             31,  // ID1
             139, // ID2

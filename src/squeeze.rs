@@ -17,9 +17,9 @@ use enough::{Stop, StopReason};
 
 use crate::{
     cache::Cache,
-    deflate::{calculate_block_size, BlockType},
+    deflate::{BlockType, calculate_block_size},
     hash::ZopfliHash,
-    lz77::{find_longest_match, LitLen, Lz77Store},
+    lz77::{LitLen, Lz77Store, find_longest_match},
     symbols::{
         get_dist_extra_bits, get_dist_symbol, get_dist_symbol_extra_bits, get_length_extra_bits,
         get_length_symbol, get_length_symbol_extra_bits,
@@ -34,11 +34,7 @@ use crate::math::F64MathExt;
 /// Cost model which should exactly match fixed tree.
 fn get_cost_fixed(litlen: usize, dist: u16) -> f64 {
     let result = if dist == 0 {
-        if litlen <= 143 {
-            8
-        } else {
-            9
-        }
+        if litlen <= 143 { 8 } else { 9 }
     } else {
         let dbits = get_dist_extra_bits(dist);
         let lbits = get_length_extra_bits(litlen);

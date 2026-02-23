@@ -585,11 +585,7 @@ fn find_longest_match_loop(
 const fn get_length_score(length: i32, distance: i32) -> i32 {
     // At 1024, the distance uses 9+ extra bits and this seems to be the sweet spot
     // on tested files.
-    if distance > 1024 {
-        length - 1
-    } else {
-        length
-    }
+    if distance > 1024 { length - 1 } else { length }
 }
 
 #[cfg(debug_assertions)]
