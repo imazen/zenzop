@@ -314,15 +314,17 @@ mod test {
             pos += 12 + len; // length + type + data + CRC
         }
         // Decompress the zlib stream to get filtered scanline data
-        inflate::decompress_to_vec_zlib(&idat_data)
-            .expect("Failed to decompress IDAT")
+        inflate::decompress_to_vec_zlib(&idat_data).expect("Failed to decompress IDAT")
     }
 
     #[test]
     fn enhanced_vs_standard_on_png_idat() {
         let test_pngs: &[(&str, &[u8])] = &[
             ("eeyore.png", include_bytes!("../test/data/eeyore.png")),
-            ("heartbleed.png", include_bytes!("../test/data/heartbleed.png")),
+            (
+                "heartbleed.png",
+                include_bytes!("../test/data/heartbleed.png"),
+            ),
             ("computer.png", include_bytes!("../test/data/computer.png")),
         ];
 
@@ -363,8 +365,14 @@ mod test {
     #[test]
     fn enhanced_vs_standard_size_report() {
         let test_files: &[(&str, &[u8])] = &[
-            ("calgary-books-32k", &include_bytes!("../test/data/calgary-books.txt")[..32768]),
-            ("codetriage.js", include_bytes!("../test/data/codetriage.js")),
+            (
+                "calgary-books-32k",
+                &include_bytes!("../test/data/calgary-books.txt")[..32768],
+            ),
+            (
+                "codetriage.js",
+                include_bytes!("../test/data/codetriage.js"),
+            ),
         ];
 
         for &(name, data) in test_files {
