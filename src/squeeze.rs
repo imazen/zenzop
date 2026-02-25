@@ -548,8 +548,7 @@ pub fn lz77_optimal<C: Cache>(
 
     let mut fully_optimized = true;
 
-    // Enhanced-mode state
-    let mut no_improvement_count: u64 = 0;
+    // Enhanced-mode state: limit diversification attempts and support checkpoint/restore
     let mut diversification_attempts: u64 = 0;
     let mut checkpoint: Option<SymbolStats> = None;
 
@@ -567,15 +566,6 @@ pub fn lz77_optimal<C: Cache>(
                 fully_optimized = false;
                 break;
             }
-        }
-
-        // Enhanced: milestone RLE at iterations 4 and 8
-        if enhanced && (current_iteration == 4 || current_iteration == 8) {
-            let mut rle_stats = beststats;
-            optimize_huffman_for_rle(&mut rle_stats.litlens);
-            optimize_huffman_for_rle(&mut rle_stats.dists);
-            rle_stats.calculate_entropy();
-            stats = rle_stats;
         }
 
         currentstore.reset();
@@ -609,9 +599,8 @@ pub fn lz77_optimal<C: Cache>(
             bestcost = cost;
 
             if enhanced {
-                no_improvement_count = 0;
-                // Save checkpoint on first improvement at iteration >= 2
-                if current_iteration >= 2 && checkpoint.is_none() {
+                // Save checkpoint on first improvement after diversification
+                if lastrandomstep != u64::MAX && checkpoint.is_none() {
                     checkpoint = Some(beststats);
                 }
             }
@@ -623,14 +612,10 @@ pub fn lz77_optimal<C: Cache>(
             if iterations_without_improvement >= max_iterations_without_improvement {
                 break;
             }
-
-            if enhanced {
-                no_improvement_count += 1;
-            }
         }
         current_iteration += 1;
         if current_iteration >= max_iterations {
-            // Enhanced: try milestone RLE at the final iteration (if > 4 iterations)
+            // Enhanced: try one final pass with RLE-smoothed cost model
             if enhanced && current_iteration > 4 {
                 let mut rle_stats = beststats;
                 optimize_huffman_for_rle(&mut rle_stats.litlens);
@@ -673,39 +658,35 @@ pub fn lz77_optimal<C: Cache>(
         stats.clear_freqs();
         stats.get_statistics(&currentstore);
 
-        if enhanced {
-            // Enhanced convergence detection
-            if lastrandomstep != u64::MAX {
-                stats = add_weighed_stat_freqs(&stats, 1.0, &laststats, 0.5);
+        if lastrandomstep != u64::MAX {
+            /* This makes it converge slower but better. Do it only once the
+            randomness kicks in so that if the user does few iterations, it gives a
+            better result sooner. */
+            stats = add_weighed_stat_freqs(&stats, 1.0, &laststats, 0.5);
+            stats.calculate_entropy();
+        }
+        if current_iteration > 5 && (cost - lastcost).abs() < f64::EPSILON {
+            if enhanced && diversification_attempts < 3 {
+                // Enhanced: limited diversification with checkpoint/restore
+                diversification_attempts += 1;
+                stats = beststats;
+                stats.randomize_stat_freqs(&mut ran_state);
                 stats.calculate_entropy();
-            }
-            if no_improvement_count >= 2 {
-                if diversification_attempts < 3 {
-                    // Trigger diversification
-                    diversification_attempts += 1;
+                lastrandomstep = current_iteration;
+            } else if enhanced && diversification_attempts >= 3 {
+                if let Some(cp) = checkpoint.take() {
+                    // Restore checkpoint for one final convergence attempt
+                    stats = cp;
+                    stats.calculate_entropy();
+                } else {
+                    // Same as original: keep diversifying
                     stats = beststats;
                     stats.randomize_stat_freqs(&mut ran_state);
                     stats.calculate_entropy();
                     lastrandomstep = current_iteration;
-                    no_improvement_count = 0;
-                } else if let Some(cp) = checkpoint {
-                    // Exhausted diversification attempts — restore checkpoint, final pass
-                    stats = cp;
-                    stats.calculate_entropy();
-                    checkpoint = None; // Don't restore again
-                    no_improvement_count = 0;
                 }
-            }
-        } else {
-            // Original Zopfli convergence logic (unchanged)
-            if lastrandomstep != u64::MAX {
-                /* This makes it converge slower but better. Do it only once the
-                randomness kicks in so that if the user does few iterations, it gives a
-                better result sooner. */
-                stats = add_weighed_stat_freqs(&stats, 1.0, &laststats, 0.5);
-                stats.calculate_entropy();
-            }
-            if current_iteration > 5 && (cost - lastcost).abs() < f64::EPSILON {
+            } else {
+                // Original Zopfli: unlimited diversification
                 stats = beststats;
                 stats.randomize_stat_freqs(&mut ran_state);
                 stats.calculate_entropy();
