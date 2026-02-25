@@ -642,10 +642,21 @@ fn encode_tree_no_output_with_scratch(
         if use_16 && count >= 4 {
             count -= 1; /* Since the first one is hardcoded. */
             clcounts[symbol as usize] += 1;
-            while count >= 3 {
-                let count2 = if count > 6 { 6 } else { count };
-                clcounts[16] += 1;
-                count -= count2;
+
+            if fuse_7 && count == 6 {
+                // Split code16(6) into code16(3) + code16(3)
+                clcounts[16] += 2;
+                count = 0;
+            } else if fuse_8 && count == 7 {
+                // Encode as code16(4) + code16(3) instead of code16(6) + literal
+                clcounts[16] += 2;
+                count = 0;
+            } else {
+                while count >= 3 {
+                    let count2 = if count > 6 { 6 } else { count };
+                    clcounts[16] += 1;
+                    count -= count2;
+                }
             }
         }
 
@@ -850,12 +861,30 @@ fn encode_tree<W: Write>(
             rle.push(symbol);
             rle_bits.push(0);
 
-            while count >= 3 {
-                let count2 = if count > 6 { 6 } else { count };
+            if fuse_7 && count == 6 {
+                // Split code16(6) into code16(3) + code16(3)
                 rle.push(16);
-                rle_bits.push(count2 - 3);
-                clcounts[16] += 1;
-                count -= count2;
+                rle_bits.push(0); // 3 - 3 = 0
+                rle.push(16);
+                rle_bits.push(0); // 3 - 3 = 0
+                clcounts[16] += 2;
+                count = 0;
+            } else if fuse_8 && count == 7 {
+                // Encode as code16(4) + code16(3) instead of code16(6) + literal
+                rle.push(16);
+                rle_bits.push(1); // 4 - 3 = 1
+                rle.push(16);
+                rle_bits.push(0); // 3 - 3 = 0
+                clcounts[16] += 2;
+                count = 0;
+            } else {
+                while count >= 3 {
+                    let count2 = if count > 6 { 6 } else { count };
+                    rle.push(16);
+                    rle_bits.push(count2 - 3);
+                    clcounts[16] += 1;
+                    count -= count2;
+                }
             }
         }
 
