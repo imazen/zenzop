@@ -132,6 +132,15 @@ pub struct Options {
     ///
     /// Default value: [`BlockType::Dynamic`].
     pub block_type: BlockType,
+    /// Enable ECT-derived optimizations for smaller output.
+    ///
+    /// When `true`, applies expanded precode search (A1), multi-strategy
+    /// Huffman tree selection (A2), and enhanced parser diversification (A3).
+    /// This produces smaller DEFLATE output at the cost of byte-for-byte
+    /// parity with upstream C Zopfli.
+    ///
+    /// Default value: `false`.
+    pub enhanced: bool,
 }
 
 impl Default for Options {
@@ -141,6 +150,7 @@ impl Default for Options {
             iterations_without_improvement: NonZeroU64::new(u64::MAX).unwrap(),
             maximum_block_splits: 15,
             block_type: BlockType::Dynamic,
+            enhanced: false,
         }
     }
 }

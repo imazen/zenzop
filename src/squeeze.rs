@@ -499,6 +499,7 @@ pub fn lz77_optimal<C: Cache>(
     inend: usize,
     max_iterations: u64,
     max_iterations_without_improvement: u64,
+    enhanced: bool,
     stop: &dyn Stop,
 ) -> Result<(Lz77Store, bool), StopReason> {
     /* Dist to get to here with smallest cost. */
@@ -515,7 +516,7 @@ pub fn lz77_optimal<C: Cache>(
     // squeeze iterations returns valid output on budget exhaustion.
     outputstore.clone_from(&currentstore);
     let mut bestcost =
-        calculate_block_size(&currentstore, 0, currentstore.size(), BlockType::Dynamic);
+        calculate_block_size(&currentstore, 0, currentstore.size(), BlockType::Dynamic, enhanced);
 
     let mut h = ZopfliHash::new();
     let mut costs = Vec::with_capacity(inend - instart + 1);
@@ -562,7 +563,8 @@ pub fn lz77_optimal<C: Cache>(
             &mut dist_array,
             &mut sublen,
         );
-        let cost = calculate_block_size(&currentstore, 0, currentstore.size(), BlockType::Dynamic);
+        let cost =
+            calculate_block_size(&currentstore, 0, currentstore.size(), BlockType::Dynamic, enhanced);
 
         if cost < bestcost {
             iterations_without_improvement = 0;

@@ -296,6 +296,7 @@ fn deflate_part<W: Write>(
                 0,
                 store.size(),
                 0,
+                options.enhanced,
                 bitwise_writer,
             )?;
             Ok(true)
@@ -562,6 +563,8 @@ fn encode_tree_no_output_with_scratch(
     use_16: bool,
     use_17: bool,
     use_18: bool,
+    fuse_7: bool,
+    fuse_8: bool,
     scratch: &mut HuffmanScratch,
 ) -> usize {
     let mut hlit = 29; /* 286 - 257 */
@@ -684,6 +687,8 @@ fn encode_tree_no_output(
     use_16: bool,
     use_17: bool,
     use_18: bool,
+    fuse_7: bool,
+    fuse_8: bool,
 ) -> usize {
     encode_tree_no_output_with_scratch(
         ll_lengths,
@@ -691,6 +696,8 @@ fn encode_tree_no_output(
         use_16,
         use_17,
         use_18,
+        fuse_7,
+        fuse_8,
         &mut HuffmanScratch::new(),
     )
 }
@@ -699,6 +706,7 @@ fn encode_tree_no_output(
 fn calculate_tree_size_with_scratch(
     ll_lengths: &[u32],
     d_lengths: &[u32],
+    enhanced: bool,
     scratch: &mut HuffmanScratch,
 ) -> usize {
     static TRUTH_TABLE: [(bool, bool, bool); 8] = [
@@ -712,15 +720,37 @@ fn calculate_tree_size_with_scratch(
         (true, true, true),
     ];
 
-    TRUTH_TABLE
-        .iter()
-        .map(|&(use_16, use_17, use_18)| {
-            encode_tree_no_output_with_scratch(
-                ll_lengths, d_lengths, use_16, use_17, use_18, scratch,
-            )
-        })
-        .min()
-        .unwrap_or(0)
+    if enhanced {
+        // Search all 32 combinations: (use_16, use_17, use_18, fuse_7, fuse_8)
+        // fuse_7/fuse_8 are only meaningful when use_16 is true
+        let mut best = usize::MAX;
+        for &(use_16, use_17, use_18) in &TRUTH_TABLE {
+            let fuse_options: &[(bool, bool)] = if use_16 {
+                &[(false, false), (true, false), (false, true), (true, true)]
+            } else {
+                &[(false, false)]
+            };
+            for &(fuse_7, fuse_8) in fuse_options {
+                let size = encode_tree_no_output_with_scratch(
+                    ll_lengths, d_lengths, use_16, use_17, use_18, fuse_7, fuse_8, scratch,
+                );
+                if size < best {
+                    best = size;
+                }
+            }
+        }
+        best
+    } else {
+        TRUTH_TABLE
+            .iter()
+            .map(|&(use_16, use_17, use_18)| {
+                encode_tree_no_output_with_scratch(
+                    ll_lengths, d_lengths, use_16, use_17, use_18, false, false, scratch,
+                )
+            })
+            .min()
+            .unwrap_or(0)
+    }
 }
 
 /// Encodes the Huffman tree and returns how many bits its encoding takes and returns output.
@@ -731,6 +761,8 @@ fn encode_tree<W: Write>(
     use_16: bool,
     use_17: bool,
     use_18: bool,
+    fuse_7: bool,
+    fuse_8: bool,
     bitwise_writer: &mut BitwiseWriter<W>,
 ) -> Result<usize, Error> {
     let mut hlit = 29; /* 286 - 257 */
@@ -885,25 +917,50 @@ fn encode_tree<W: Write>(
 fn add_dynamic_tree<W: Write>(
     ll_lengths: &[u32],
     d_lengths: &[u32],
+    enhanced: bool,
     bitwise_writer: &mut BitwiseWriter<W>,
 ) -> Result<(), Error> {
-    let mut best = 0;
-    let mut bestsize = 0;
+    let mut best_use_16 = false;
+    let mut best_use_17 = false;
+    let mut best_use_18 = false;
+    let mut best_fuse_7 = false;
+    let mut best_fuse_8 = false;
+    let mut bestsize = usize::MAX;
 
-    for i in 0..8 {
-        let size = encode_tree_no_output(ll_lengths, d_lengths, i & 1 > 0, i & 2 > 0, i & 4 > 0);
-        if bestsize == 0 || size < bestsize {
-            bestsize = size;
-            best = i;
+    for i in 0..8u8 {
+        let use_16 = i & 1 > 0;
+        let use_17 = i & 2 > 0;
+        let use_18 = i & 4 > 0;
+
+        let fuse_options: &[(bool, bool)] = if enhanced && use_16 {
+            &[(false, false), (true, false), (false, true), (true, true)]
+        } else {
+            &[(false, false)]
+        };
+
+        for &(fuse_7, fuse_8) in fuse_options {
+            let size = encode_tree_no_output(
+                ll_lengths, d_lengths, use_16, use_17, use_18, fuse_7, fuse_8,
+            );
+            if size < bestsize {
+                bestsize = size;
+                best_use_16 = use_16;
+                best_use_17 = use_17;
+                best_use_18 = use_18;
+                best_fuse_7 = fuse_7;
+                best_fuse_8 = fuse_8;
+            }
         }
     }
 
     encode_tree(
         ll_lengths,
         d_lengths,
-        best & 1 > 0,
-        best & 2 > 0,
-        best & 4 > 0,
+        best_use_16,
+        best_use_17,
+        best_use_18,
+        best_fuse_7,
+        best_fuse_8,
         bitwise_writer,
     )
     .map(|_| ())
@@ -931,6 +988,7 @@ fn add_lz77_block<W: Write>(
     lstart: usize,
     lend: usize,
     expected_data_size: usize,
+    enhanced: bool,
     bitwise_writer: &mut BitwiseWriter<W>,
 ) -> Result<(), Error> {
     if btype == BlockType::Uncompressed {
@@ -956,10 +1014,10 @@ fn add_lz77_block<W: Write>(
         BlockType::Dynamic => {
             bitwise_writer.add_bit(0)?;
             bitwise_writer.add_bit(1)?;
-            let (_, ll_lengths, d_lengths) = get_dynamic_lengths(lz77, lstart, lend);
+            let (_, ll_lengths, d_lengths) = get_dynamic_lengths(lz77, lstart, lend, enhanced);
 
             let _detect_tree_size = bitwise_writer.bytes_written();
-            add_dynamic_tree(&ll_lengths, &d_lengths, bitwise_writer)?;
+            add_dynamic_tree(&ll_lengths, &d_lengths, enhanced, bitwise_writer)?;
             debug!(
                 "treesize: {}",
                 bitwise_writer.bytes_written() - _detect_tree_size
@@ -1008,7 +1066,13 @@ fn add_lz77_block<W: Write>(
 /// dists: ll77 distances
 /// lstart: start of block
 /// lend: end of block (not inclusive)
-pub fn calculate_block_size(lz77: &Lz77Store, lstart: usize, lend: usize, btype: BlockType) -> f64 {
+pub fn calculate_block_size(
+    lz77: &Lz77Store,
+    lstart: usize,
+    lend: usize,
+    btype: BlockType,
+    enhanced: bool,
+) -> f64 {
     match btype {
         BlockType::Uncompressed => {
             let length = lz77.get_byte_range(lstart, lend);
@@ -1025,7 +1089,7 @@ pub fn calculate_block_size(lz77: &Lz77Store, lstart: usize, lend: usize, btype:
                 as f64;
             result
         }
-        BlockType::Dynamic => get_dynamic_lengths(lz77, lstart, lend).0 + 3.0,
+        BlockType::Dynamic => get_dynamic_lengths(lz77, lstart, lend, enhanced).0 + 3.0,
     }
 }
 
@@ -1041,12 +1105,14 @@ fn try_optimize_huffman_for_rle_with_scratch(
     d_counts: &[usize; ZOPFLI_NUM_D],
     ll_lengths: &[u32; ZOPFLI_NUM_LL],
     d_lengths: &[u32; ZOPFLI_NUM_D],
+    enhanced: bool,
     scratch: &mut HuffmanScratch,
 ) -> (f64, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
     let mut ll_counts2 = *ll_counts;
     let mut d_counts2 = *d_counts;
 
-    let treesize = calculate_tree_size_with_scratch(ll_lengths, d_lengths, scratch);
+    let treesize =
+        calculate_tree_size_with_scratch(ll_lengths, d_lengths, enhanced, scratch);
     let datasize = calculate_block_symbol_size_given_counts(
         ll_counts, d_counts, ll_lengths, d_lengths, lz77, lstart, lend,
     );
@@ -1060,7 +1126,8 @@ fn try_optimize_huffman_for_rle_with_scratch(
     length_limited_code_lengths_into(&d_counts2, 15, scratch, &mut d_lengths2);
     patch_distance_codes_for_buggy_decoders(&mut d_lengths2[..]);
 
-    let treesize2 = calculate_tree_size_with_scratch(&ll_lengths2, &d_lengths2, scratch);
+    let treesize2 =
+        calculate_tree_size_with_scratch(&ll_lengths2, &d_lengths2, enhanced, scratch);
     let datasize2 = calculate_block_symbol_size_given_counts(
         ll_counts,
         d_counts,
@@ -1084,6 +1151,7 @@ fn get_dynamic_lengths_with_scratch(
     lz77: &Lz77Store,
     lstart: usize,
     lend: usize,
+    enhanced: bool,
     scratch: &mut HuffmanScratch,
 ) -> (f64, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
     let (mut ll_counts, d_counts) = lz77.get_histogram(lstart, lend);
@@ -1104,15 +1172,22 @@ fn get_dynamic_lengths_with_scratch(
         &d_counts,
         &ll_lengths,
         &d_lengths,
+        enhanced,
         scratch,
     )
 }
 
 /// Calculates the bit lengths for the symbols for dynamic blocks.
 /// Non-scratch version for callers outside the hot path.
-fn get_dynamic_lengths(lz77: &Lz77Store, lstart: usize, lend: usize) -> (f64, Vec<u32>, Vec<u32>) {
+fn get_dynamic_lengths(
+    lz77: &Lz77Store,
+    lstart: usize,
+    lend: usize,
+    enhanced: bool,
+) -> (f64, Vec<u32>, Vec<u32>) {
     let mut scratch = HuffmanScratch::new();
-    let (cost, ll, d) = get_dynamic_lengths_with_scratch(lz77, lstart, lend, &mut scratch);
+    let (cost, ll, d) =
+        get_dynamic_lengths_with_scratch(lz77, lstart, lend, enhanced, &mut scratch);
     (cost, ll.to_vec(), d.to_vec())
 }
 
@@ -1175,11 +1250,13 @@ fn add_lz77_block_auto_type<W: Write>(
     lstart: usize,
     lend: usize,
     expected_data_size: usize,
+    enhanced: bool,
     bitwise_writer: &mut BitwiseWriter<W>,
 ) -> Result<(), Error> {
-    let uncompressedcost = calculate_block_size(lz77, lstart, lend, BlockType::Uncompressed);
-    let mut fixedcost = calculate_block_size(lz77, lstart, lend, BlockType::Fixed);
-    let dyncost = calculate_block_size(lz77, lstart, lend, BlockType::Dynamic);
+    let uncompressedcost =
+        calculate_block_size(lz77, lstart, lend, BlockType::Uncompressed, enhanced);
+    let mut fixedcost = calculate_block_size(lz77, lstart, lend, BlockType::Fixed, enhanced);
+    let dyncost = calculate_block_size(lz77, lstart, lend, BlockType::Dynamic, enhanced);
 
     /* Whether to perform the expensive calculation of creating an optimal block
     with fixed huffman tree to check if smaller. Only do this for small blocks or
@@ -1207,7 +1284,8 @@ fn add_lz77_block_auto_type<W: Write>(
             inend,
             &mut fixedstore,
         );
-        fixedcost = calculate_block_size(&fixedstore, 0, fixedstore.size(), BlockType::Fixed);
+        fixedcost =
+            calculate_block_size(&fixedstore, 0, fixedstore.size(), BlockType::Fixed, enhanced);
     }
 
     if uncompressedcost <= fixedcost && uncompressedcost <= dyncost {
@@ -1219,6 +1297,7 @@ fn add_lz77_block_auto_type<W: Write>(
             lstart,
             lend,
             expected_data_size,
+            enhanced,
             bitwise_writer,
         )
     } else if fixedcost <= dyncost {
@@ -1231,6 +1310,7 @@ fn add_lz77_block_auto_type<W: Write>(
                 0,
                 fixedstore.size(),
                 expected_data_size,
+                enhanced,
                 bitwise_writer,
             )
         } else {
@@ -1242,6 +1322,7 @@ fn add_lz77_block_auto_type<W: Write>(
                 lstart,
                 lend,
                 expected_data_size,
+                enhanced,
                 bitwise_writer,
             )
         }
@@ -1254,6 +1335,7 @@ fn add_lz77_block_auto_type<W: Write>(
             lstart,
             lend,
             expected_data_size,
+            enhanced,
             bitwise_writer,
         )
     }
@@ -1264,9 +1346,10 @@ fn calculate_block_size_dynamic_with_scratch(
     lz77: &Lz77Store,
     lstart: usize,
     lend: usize,
+    enhanced: bool,
     scratch: &mut HuffmanScratch,
 ) -> f64 {
-    get_dynamic_lengths_with_scratch(lz77, lstart, lend, scratch).0 + 3.0
+    get_dynamic_lengths_with_scratch(lz77, lstart, lend, enhanced, scratch).0 + 3.0
 }
 
 /// Zero-allocation version of `calculate_block_size_auto_type`.
@@ -1274,15 +1357,17 @@ pub fn calculate_block_size_auto_type_with_scratch(
     lz77: &Lz77Store,
     lstart: usize,
     lend: usize,
+    enhanced: bool,
     scratch: &mut HuffmanScratch,
 ) -> f64 {
-    let uncompressedcost = calculate_block_size(lz77, lstart, lend, BlockType::Uncompressed);
+    let uncompressedcost =
+        calculate_block_size(lz77, lstart, lend, BlockType::Uncompressed, enhanced);
     let fixedcost = if lz77.size() > 1000 {
         uncompressedcost
     } else {
-        calculate_block_size(lz77, lstart, lend, BlockType::Fixed)
+        calculate_block_size(lz77, lstart, lend, BlockType::Fixed, enhanced)
     };
-    let dyncost = calculate_block_size_dynamic_with_scratch(lz77, lstart, lend, scratch);
+    let dyncost = calculate_block_size_dynamic_with_scratch(lz77, lstart, lend, enhanced, scratch);
     uncompressedcost.min(fixedcost).min(dyncost)
 }
 
@@ -1291,11 +1376,12 @@ fn add_all_blocks<W: Write>(
     lz77: &Lz77Store,
     final_block: bool,
     in_data: &[u8],
+    enhanced: bool,
     bitwise_writer: &mut BitwiseWriter<W>,
 ) -> Result<(), Error> {
     let mut last = 0;
     for &item in splitpoints {
-        add_lz77_block_auto_type(false, in_data, lz77, last, item, 0, bitwise_writer)?;
+        add_lz77_block_auto_type(false, in_data, lz77, last, item, 0, enhanced, bitwise_writer)?;
         last = item;
     }
     add_lz77_block_auto_type(
@@ -1305,6 +1391,7 @@ fn add_all_blocks<W: Write>(
         last,
         lz77.size(),
         0,
+        enhanced,
         bitwise_writer,
     )
 }
@@ -1360,6 +1447,7 @@ fn blocksplit_attempt<W: Write>(
                     end,
                     options.iteration_count.get(),
                     options.iterations_without_improvement.get(),
+                    options.enhanced,
                     stop,
                 )
             })
@@ -1367,8 +1455,13 @@ fn blocksplit_attempt<W: Write>(
             .map_err(stop_to_error)?;
         for (i, (store, fo)) in results.iter().enumerate() {
             fully_optimized &= fo;
-            totalcost +=
-                calculate_block_size_auto_type_with_scratch(store, 0, store.size(), &mut scratch);
+            totalcost += calculate_block_size_auto_type_with_scratch(
+                store,
+                0,
+                store.size(),
+                options.enhanced,
+                &mut scratch,
+            );
             debug_assert!(instart == inend || store.size() > 0);
             for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
                 lz77.append_store_item(litlens, pos as usize);
@@ -1391,12 +1484,18 @@ fn blocksplit_attempt<W: Write>(
                 end,
                 options.iteration_count.get(),
                 options.iterations_without_improvement.get(),
+                options.enhanced,
                 stop,
             )
             .map_err(stop_to_error)?;
             fully_optimized &= fo;
-            totalcost +=
-                calculate_block_size_auto_type_with_scratch(&store, 0, store.size(), &mut scratch);
+            totalcost += calculate_block_size_auto_type_with_scratch(
+                &store,
+                0,
+                store.size(),
+                options.enhanced,
+                &mut scratch,
+            );
             debug_assert!(instart == inend || store.size() > 0);
             for (&litlens, &pos) in store.litlens.iter().zip(store.pos.iter()) {
                 lz77.append_store_item(litlens, pos as usize);
@@ -1417,19 +1516,36 @@ fn blocksplit_attempt<W: Write>(
 
         let mut last = 0;
         for &item in &splitpoints2 {
-            totalcost2 +=
-                calculate_block_size_auto_type_with_scratch(&lz77, last, item, &mut scratch);
+            totalcost2 += calculate_block_size_auto_type_with_scratch(
+                &lz77,
+                last,
+                item,
+                options.enhanced,
+                &mut scratch,
+            );
             last = item;
         }
-        totalcost2 +=
-            calculate_block_size_auto_type_with_scratch(&lz77, last, lz77.size(), &mut scratch);
+        totalcost2 += calculate_block_size_auto_type_with_scratch(
+            &lz77,
+            last,
+            lz77.size(),
+            options.enhanced,
+            &mut scratch,
+        );
 
         if totalcost2 < totalcost {
             splitpoints = splitpoints2;
         }
     }
 
-    add_all_blocks(&splitpoints, &lz77, final_block, in_data, bitwise_writer)?;
+    add_all_blocks(
+        &splitpoints,
+        &lz77,
+        final_block,
+        in_data,
+        options.enhanced,
+        bitwise_writer,
+    )?;
     Ok(fully_optimized)
 }
 
