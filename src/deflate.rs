@@ -368,7 +368,7 @@ const FIXED_TREE_D: [u32; ZOPFLI_NUM_D] = [5; ZOPFLI_NUM_D];
 /// Changes the population counts in a way that the consequent Huffman tree
 /// compression, especially its rle-part, will be more likely to compress this data
 /// more efficiently. length contains the size of the histogram.
-fn optimize_huffman_for_rle(counts: &mut [usize]) {
+pub(crate) fn optimize_huffman_for_rle(counts: &mut [usize]) {
     let mut length = counts.len();
     // 1) We don't want to touch the trailing zeros. We may break the
     // rules of the format by adding more data in the distance codes.

@@ -17,7 +17,7 @@ use enough::{Stop, StopReason};
 
 use crate::{
     cache::Cache,
-    deflate::{BlockType, calculate_block_size},
+    deflate::{BlockType, calculate_block_size, optimize_huffman_for_rle},
     hash::ZopfliHash,
     lz77::{LitLen, Lz77Store, find_longest_match},
     symbols::{
@@ -528,10 +528,24 @@ pub fn lz77_optimal<C: Cache>(
 
     let mut lastcost = 0.0;
     /* Try randomizing the costs a bit once the size stabilizes. */
-    let mut ran_state = RanState::new();
+    let mut ran_state = if enhanced {
+        // Deterministic block-dependent seed for enhanced mode
+        let seed = (blocksize as u32).wrapping_mul(0x9E3779B9);
+        RanState {
+            m_w: seed.wrapping_add(1),
+            m_z: seed.wrapping_add(2),
+        }
+    } else {
+        RanState::new()
+    };
     let mut lastrandomstep = u64::MAX;
 
     let mut fully_optimized = true;
+
+    // Enhanced-mode state
+    let mut no_improvement_count: u64 = 0;
+    let mut diversification_attempts: u64 = 0;
+    let mut checkpoint: Option<SymbolStats> = None;
 
     /* Do regular deflate, then loop multiple shortest path runs, each time using
     the statistics of the previous run. */
@@ -548,6 +562,16 @@ pub fn lz77_optimal<C: Cache>(
                 break;
             }
         }
+
+        // Enhanced: milestone RLE at iterations 4 and 8
+        if enhanced && (current_iteration == 4 || current_iteration == 8) {
+            let mut rle_stats = beststats;
+            optimize_huffman_for_rle(&mut rle_stats.litlens);
+            optimize_huffman_for_rle(&mut rle_stats.dists);
+            rle_stats.calculate_entropy();
+            stats = rle_stats;
+        }
+
         currentstore.reset();
         let cost_model = CostModel::from_stats(&stats);
         lz77_optimal_run(
@@ -573,6 +597,14 @@ pub fn lz77_optimal<C: Cache>(
             beststats = stats;
             bestcost = cost;
 
+            if enhanced {
+                no_improvement_count = 0;
+                // Save checkpoint on first improvement at iteration >= 2
+                if current_iteration >= 2 && checkpoint.is_none() {
+                    checkpoint = Some(beststats);
+                }
+            }
+
             debug!("Iteration {current_iteration}: {cost} bit");
         } else {
             iterations_without_improvement += 1;
@@ -580,26 +612,94 @@ pub fn lz77_optimal<C: Cache>(
             if iterations_without_improvement >= max_iterations_without_improvement {
                 break;
             }
+
+            if enhanced {
+                no_improvement_count += 1;
+            }
         }
         current_iteration += 1;
         if current_iteration >= max_iterations {
+            // Enhanced: try milestone RLE at the final iteration (if > 4 iterations)
+            if enhanced && current_iteration > 4 {
+                let mut rle_stats = beststats;
+                optimize_huffman_for_rle(&mut rle_stats.litlens);
+                optimize_huffman_for_rle(&mut rle_stats.dists);
+                rle_stats.calculate_entropy();
+                currentstore.reset();
+                let cost_model = CostModel::from_stats(&rle_stats);
+                lz77_optimal_run(
+                    lmc,
+                    in_data,
+                    instart,
+                    inend,
+                    |a, b| cost_model.cost(a, b),
+                    &mut currentstore,
+                    &mut h,
+                    &mut costs,
+                    &mut length_array,
+                    &mut dist_array,
+                    &mut sublen,
+                );
+                let rle_cost = calculate_block_size(
+                    &currentstore,
+                    0,
+                    currentstore.size(),
+                    BlockType::Dynamic,
+                    enhanced,
+                );
+                if rle_cost < bestcost {
+                    outputstore.clone_from(&currentstore);
+                    #[allow(unused_assignments)]
+                    {
+                        bestcost = rle_cost;
+                    }
+                    debug!("Final RLE iteration: {rle_cost} bit");
+                }
+            }
             break;
         }
         let laststats = stats;
         stats.clear_freqs();
         stats.get_statistics(&currentstore);
-        if lastrandomstep != u64::MAX {
-            /* This makes it converge slower but better. Do it only once the
-            randomness kicks in so that if the user does few iterations, it gives a
-            better result sooner. */
-            stats = add_weighed_stat_freqs(&stats, 1.0, &laststats, 0.5);
-            stats.calculate_entropy();
-        }
-        if current_iteration > 5 && (cost - lastcost).abs() < f64::EPSILON {
-            stats = beststats;
-            stats.randomize_stat_freqs(&mut ran_state);
-            stats.calculate_entropy();
-            lastrandomstep = current_iteration;
+
+        if enhanced {
+            // Enhanced convergence detection
+            if lastrandomstep != u64::MAX {
+                stats = add_weighed_stat_freqs(&stats, 1.0, &laststats, 0.5);
+                stats.calculate_entropy();
+            }
+            if no_improvement_count >= 2 {
+                if diversification_attempts < 3 {
+                    // Trigger diversification
+                    diversification_attempts += 1;
+                    stats = beststats;
+                    stats.randomize_stat_freqs(&mut ran_state);
+                    stats.calculate_entropy();
+                    lastrandomstep = current_iteration;
+                    no_improvement_count = 0;
+                } else if let Some(cp) = checkpoint {
+                    // Exhausted diversification attempts — restore checkpoint, final pass
+                    stats = cp;
+                    stats.calculate_entropy();
+                    checkpoint = None; // Don't restore again
+                    no_improvement_count = 0;
+                }
+            }
+        } else {
+            // Original Zopfli convergence logic (unchanged)
+            if lastrandomstep != u64::MAX {
+                /* This makes it converge slower but better. Do it only once the
+                randomness kicks in so that if the user does few iterations, it gives a
+                better result sooner. */
+                stats = add_weighed_stat_freqs(&stats, 1.0, &laststats, 0.5);
+                stats.calculate_entropy();
+            }
+            if current_iteration > 5 && (cost - lastcost).abs() < f64::EPSILON {
+                stats = beststats;
+                stats.randomize_stat_freqs(&mut ran_state);
+                stats.calculate_entropy();
+                lastrandomstep = current_iteration;
+            }
         }
         lastcost = cost;
     }
