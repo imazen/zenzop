@@ -299,4 +299,103 @@ mod test {
             inflate::decompress_to_vec(&enhanced).expect("Enhanced output must decompress");
         assert_eq!(&data[..], &decompressed[..]);
     }
+
+    /// Extract filtered IDAT data from a PNG file by decompressing the zlib stream.
+    fn extract_png_idat(png_data: &[u8]) -> Vec<u8> {
+        // Parse PNG chunks, concatenate IDAT data
+        let mut idat_data = Vec::new();
+        let mut pos = 8; // Skip PNG signature
+        while pos + 12 <= png_data.len() {
+            let len = u32::from_be_bytes(png_data[pos..pos + 4].try_into().unwrap()) as usize;
+            let chunk_type = &png_data[pos + 4..pos + 8];
+            if chunk_type == b"IDAT" {
+                idat_data.extend_from_slice(&png_data[pos + 8..pos + 8 + len]);
+            }
+            pos += 12 + len; // length + type + data + CRC
+        }
+        // Decompress the zlib stream to get filtered scanline data
+        inflate::decompress_to_vec_zlib(&idat_data)
+            .expect("Failed to decompress IDAT")
+    }
+
+    #[test]
+    fn enhanced_vs_standard_on_png_idat() {
+        let test_pngs: &[(&str, &[u8])] = &[
+            ("eeyore.png", include_bytes!("../test/data/eeyore.png")),
+            ("heartbleed.png", include_bytes!("../test/data/heartbleed.png")),
+            ("computer.png", include_bytes!("../test/data/computer.png")),
+        ];
+
+        for &(name, png_data) in test_pngs {
+            let filtered = extract_png_idat(png_data);
+
+            let compress = |enhanced: bool| -> Vec<u8> {
+                let mut compressed = Vec::new();
+                let options = Options {
+                    enhanced,
+                    iteration_count: core::num::NonZeroU64::new(15).unwrap(),
+                    ..Options::default()
+                };
+                let mut encoder = DeflateEncoder::new(options, &mut compressed);
+                io::copy(&mut &*filtered, &mut encoder).unwrap();
+                encoder.finish().unwrap();
+                compressed
+            };
+
+            let standard = compress(false);
+            let enhanced = compress(true);
+
+            eprintln!(
+                "{name}: idat={} bytes, standard={} enhanced={} saved={} ({:.3}%)",
+                filtered.len(),
+                standard.len(),
+                enhanced.len(),
+                standard.len() as i64 - enhanced.len() as i64,
+                (1.0 - enhanced.len() as f64 / standard.len() as f64) * 100.0,
+            );
+
+            let decompressed =
+                inflate::decompress_to_vec(&enhanced).expect("Enhanced output must decompress");
+            assert_eq!(filtered, decompressed);
+        }
+    }
+
+    #[test]
+    fn enhanced_vs_standard_size_report() {
+        let test_files: &[(&str, &[u8])] = &[
+            ("calgary-books-32k", &include_bytes!("../test/data/calgary-books.txt")[..32768]),
+            ("codetriage.js", include_bytes!("../test/data/codetriage.js")),
+        ];
+
+        for &(name, data) in test_files {
+            let compress = |enhanced: bool| -> Vec<u8> {
+                let mut compressed = Vec::new();
+                let options = Options {
+                    enhanced,
+                    iteration_count: core::num::NonZeroU64::new(15).unwrap(),
+                    ..Options::default()
+                };
+                let mut encoder = DeflateEncoder::new(options, &mut compressed);
+                io::copy(&mut &*data, &mut encoder).unwrap();
+                encoder.finish().unwrap();
+                compressed
+            };
+
+            let standard = compress(false);
+            let enhanced = compress(true);
+
+            eprintln!(
+                "{name} ({} bytes): standard={} enhanced={} saved={} ({:.3}%)",
+                data.len(),
+                standard.len(),
+                enhanced.len(),
+                standard.len() as i64 - enhanced.len() as i64,
+                (1.0 - enhanced.len() as f64 / standard.len() as f64) * 100.0,
+            );
+
+            let decompressed =
+                inflate::decompress_to_vec(&enhanced).expect("Enhanced output must decompress");
+            assert_eq!(data, &decompressed[..]);
+        }
+    }
 }
