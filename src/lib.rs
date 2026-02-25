@@ -238,4 +238,65 @@ mod test {
             prop_assert_eq!(data, decompressed_data, "Decompressed data should match input data");
         }
     }
+
+    #[test]
+    fn enhanced_produces_valid_deflate() {
+        let data = b"The quick brown fox jumps over the lazy dog. \
+                     The quick brown fox jumps over the lazy dog. \
+                     The quick brown fox jumps over the lazy dog.";
+        let mut compressed = Vec::new();
+        let options = Options {
+            enhanced: true,
+            iteration_count: core::num::NonZeroU64::new(5).unwrap(),
+            ..Options::default()
+        };
+        let mut encoder = DeflateEncoder::new(options, &mut compressed);
+        io::copy(&mut &data[..], &mut encoder).unwrap();
+        encoder.finish().unwrap();
+
+        let decompressed = inflate::decompress_to_vec(&compressed)
+            .expect("Enhanced DEFLATE output must be valid");
+        assert_eq!(&data[..], &decompressed[..]);
+    }
+
+    #[test]
+    fn enhanced_output_no_larger_than_standard() {
+        // Generate test data with enough structure for compression to matter
+        let mut data = Vec::with_capacity(16384);
+        for i in 0..16384u16 {
+            // Mix of repetitive and varied content
+            data.push((i % 256) as u8);
+            if i % 7 == 0 {
+                data.extend_from_slice(b"repeat");
+            }
+        }
+
+        let compress = |enhanced: bool| -> Vec<u8> {
+            let mut compressed = Vec::new();
+            let options = Options {
+                enhanced,
+                iteration_count: core::num::NonZeroU64::new(10).unwrap(),
+                ..Options::default()
+            };
+            let mut encoder = DeflateEncoder::new(options, &mut compressed);
+            io::copy(&mut &data[..], &mut encoder).unwrap();
+            encoder.finish().unwrap();
+            compressed
+        };
+
+        let standard = compress(false);
+        let enhanced = compress(true);
+
+        assert!(
+            enhanced.len() <= standard.len(),
+            "Enhanced ({} bytes) should be <= standard ({} bytes)",
+            enhanced.len(),
+            standard.len()
+        );
+
+        // Verify enhanced output decompresses correctly
+        let decompressed = inflate::decompress_to_vec(&enhanced)
+            .expect("Enhanced output must decompress");
+        assert_eq!(&data[..], &decompressed[..]);
+    }
 }
