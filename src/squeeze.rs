@@ -19,6 +19,7 @@ use crate::{
     cache::Cache,
     deflate::{BlockType, calculate_block_size, optimize_huffman_for_rle},
     hash::ZopfliHash,
+    katajainen::{HuffmanScratch, length_limited_code_lengths_into},
     lz77::{LitLen, Lz77Store, find_longest_match},
     symbols::{
         get_dist_extra_bits, get_dist_symbol, get_dist_symbol_extra_bits, get_length_extra_bits,
@@ -204,6 +205,32 @@ impl SymbolStats {
     fn clear_freqs(&mut self) {
         self.litlens = [0; ZOPFLI_NUM_LL];
         self.dists = [0; ZOPFLI_NUM_D];
+    }
+
+    /// Apply RLE smoothing to a copy of beststats frequencies, build Huffman
+    /// code lengths, and set the symbol costs to those integer bit lengths.
+    /// This "grounds truth" the cost model to match actual Huffman encoding,
+    /// which is more accurate than entropy-based costs.
+    fn calculate_huffman_costs(&mut self, beststats: &SymbolStats, scratch: &mut HuffmanScratch) {
+        // Clone frequency counts and apply RLE smoothing
+        let mut ll_counts = beststats.litlens;
+        let mut d_counts = beststats.dists;
+        optimize_huffman_for_rle(&mut ll_counts);
+        optimize_huffman_for_rle(&mut d_counts);
+
+        // Build Huffman code lengths from smoothed counts
+        let mut ll_lengths = [0u32; ZOPFLI_NUM_LL];
+        let mut d_lengths = [0u32; ZOPFLI_NUM_D];
+        length_limited_code_lengths_into(&ll_counts, 15, scratch, &mut ll_lengths);
+        length_limited_code_lengths_into(&d_counts, 15, scratch, &mut d_lengths);
+
+        // Set symbol costs to integer code lengths
+        for (i, &len) in ll_lengths.iter().enumerate() {
+            self.ll_symbols[i] = f64::from(len);
+        }
+        for (i, &len) in d_lengths.iter().enumerate() {
+            self.d_symbols[i] = f64::from(len);
+        }
     }
 }
 
@@ -516,6 +543,7 @@ pub fn lz77_optimal<C: Cache>(
     // Seed outputstore with the greedy result so that even zero completed
     // squeeze iterations returns valid output on budget exhaustion.
     outputstore.clone_from(&currentstore);
+    // Seed bestcost with enhanced cost model for consistent comparison
     let mut bestcost = calculate_block_size(
         &currentstore,
         0,
@@ -552,6 +580,13 @@ pub fn lz77_optimal<C: Cache>(
     let mut diversification_attempts: u64 = 0;
     let mut checkpoint: Option<SymbolStats> = None;
 
+    // Scratch buffer for Huffman code length calculation in milestone RLE
+    let mut huffman_scratch = if enhanced {
+        Some(HuffmanScratch::new())
+    } else {
+        None
+    };
+
     /* Do regular deflate, then loop multiple shortest path runs, each time using
     the statistics of the previous run. */
     /* Repeat statistics with each time the cost model from the previous stat
@@ -565,6 +600,15 @@ pub fn lz77_optimal<C: Cache>(
             Err(_) => {
                 fully_optimized = false;
                 break;
+            }
+        }
+
+        // Enhanced: milestone RLE at specific iterations — convert beststats
+        // to Huffman code-length cost model for more accurate costs.
+        // Only trigger on longer runs where there's time to recover.
+        if enhanced && current_iteration == 29 {
+            if let Some(ref mut scratch) = huffman_scratch {
+                stats.calculate_huffman_costs(&beststats, scratch);
             }
         }
 
@@ -615,41 +659,42 @@ pub fn lz77_optimal<C: Cache>(
         }
         current_iteration += 1;
         if current_iteration >= max_iterations {
-            // Enhanced: try one final pass with RLE-smoothed cost model
+            // Enhanced: ultra mode — one additional pass with Huffman code-length
+            // cost model derived from the best result.
             if enhanced && current_iteration > 4 {
-                let mut rle_stats = beststats;
-                optimize_huffman_for_rle(&mut rle_stats.litlens);
-                optimize_huffman_for_rle(&mut rle_stats.dists);
-                rle_stats.calculate_entropy();
-                currentstore.reset();
-                let cost_model = CostModel::from_stats(&rle_stats);
-                lz77_optimal_run(
-                    lmc,
-                    in_data,
-                    instart,
-                    inend,
-                    |a, b| cost_model.cost(a, b),
-                    &mut currentstore,
-                    &mut h,
-                    &mut costs,
-                    &mut length_array,
-                    &mut dist_array,
-                    &mut sublen,
-                );
-                let rle_cost = calculate_block_size(
-                    &currentstore,
-                    0,
-                    currentstore.size(),
-                    BlockType::Dynamic,
-                    enhanced,
-                );
-                if rle_cost < bestcost {
-                    outputstore.clone_from(&currentstore);
-                    #[allow(unused_assignments)]
-                    {
-                        bestcost = rle_cost;
+                if let Some(ref mut scratch) = huffman_scratch {
+                    let mut ultra_stats = SymbolStats::default();
+                    ultra_stats.calculate_huffman_costs(&beststats, scratch);
+                    currentstore.reset();
+                    let cost_model = CostModel::from_stats(&ultra_stats);
+                    lz77_optimal_run(
+                        lmc,
+                        in_data,
+                        instart,
+                        inend,
+                        |a, b| cost_model.cost(a, b),
+                        &mut currentstore,
+                        &mut h,
+                        &mut costs,
+                        &mut length_array,
+                        &mut dist_array,
+                        &mut sublen,
+                    );
+                    let ultra_cost = calculate_block_size(
+                        &currentstore,
+                        0,
+                        currentstore.size(),
+                        BlockType::Dynamic,
+                        enhanced,
+                    );
+                    if ultra_cost < bestcost {
+                        outputstore.clone_from(&currentstore);
+                        #[allow(unused_assignments)]
+                        {
+                            bestcost = ultra_cost;
+                        }
+                        debug!("Ultra pass: {ultra_cost} bit");
                     }
-                    debug!("Final RLE iteration: {rle_cost} bit");
                 }
             }
             break;

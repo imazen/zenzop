@@ -8,7 +8,16 @@ use std::{
 use log::info;
 
 fn main() {
-    let options = zenzop::Options::default();
+    let enhanced = env::var("ZENZOP_ENHANCED").is_ok();
+    let iterations: u64 = env::var("ZENZOP_ITERATIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(15);
+    let options = zenzop::Options {
+        enhanced,
+        iteration_count: core::num::NonZeroU64::new(iterations).unwrap(),
+        ..zenzop::Options::default()
+    };
     let output_type = zenzop::Format::Gzip;
 
     // TODO: CLI arguments
