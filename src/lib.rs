@@ -254,8 +254,8 @@ mod test {
         io::copy(&mut &data[..], &mut encoder).unwrap();
         encoder.finish().unwrap();
 
-        let decompressed = inflate::decompress_to_vec(&compressed)
-            .expect("Enhanced DEFLATE output must be valid");
+        let decompressed =
+            inflate::decompress_to_vec(&compressed).expect("Enhanced DEFLATE output must be valid");
         assert_eq!(&data[..], &decompressed[..]);
     }
 
@@ -295,8 +295,8 @@ mod test {
         );
 
         // Verify enhanced output decompresses correctly
-        let decompressed = inflate::decompress_to_vec(&enhanced)
-            .expect("Enhanced output must decompress");
+        let decompressed =
+            inflate::decompress_to_vec(&enhanced).expect("Enhanced output must decompress");
         assert_eq!(&data[..], &decompressed[..]);
     }
 }

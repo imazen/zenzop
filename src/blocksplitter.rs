@@ -67,7 +67,13 @@ fn estimate_cost(
     lend: usize,
     scratch: &RefCell<HuffmanScratch>,
 ) -> f64 {
-    calculate_block_size_auto_type_with_scratch(lz77, lstart, lend, false, &mut scratch.borrow_mut())
+    calculate_block_size_auto_type_with_scratch(
+        lz77,
+        lstart,
+        lend,
+        false,
+        &mut scratch.borrow_mut(),
+    )
 }
 
 /// Finds next block to try to split, the largest of the available ones.

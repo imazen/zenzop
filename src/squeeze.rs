@@ -492,6 +492,7 @@ pub fn lz77_optimal_fixed<C: Cache>(
 /// Calculates lit/len and dist pairs for given data.
 /// If `instart` is larger than 0, it uses values before `instart` as starting
 /// dictionary.
+#[allow(clippy::too_many_arguments)]
 pub fn lz77_optimal<C: Cache>(
     lmc: &mut C,
     in_data: &[u8],
@@ -515,8 +516,13 @@ pub fn lz77_optimal<C: Cache>(
     // Seed outputstore with the greedy result so that even zero completed
     // squeeze iterations returns valid output on budget exhaustion.
     outputstore.clone_from(&currentstore);
-    let mut bestcost =
-        calculate_block_size(&currentstore, 0, currentstore.size(), BlockType::Dynamic, enhanced);
+    let mut bestcost = calculate_block_size(
+        &currentstore,
+        0,
+        currentstore.size(),
+        BlockType::Dynamic,
+        enhanced,
+    );
 
     let mut h = ZopfliHash::new();
     let mut costs = Vec::with_capacity(inend - instart + 1);
@@ -587,8 +593,13 @@ pub fn lz77_optimal<C: Cache>(
             &mut dist_array,
             &mut sublen,
         );
-        let cost =
-            calculate_block_size(&currentstore, 0, currentstore.size(), BlockType::Dynamic, enhanced);
+        let cost = calculate_block_size(
+            &currentstore,
+            0,
+            currentstore.size(),
+            BlockType::Dynamic,
+            enhanced,
+        );
 
         if cost < bestcost {
             iterations_without_improvement = 0;

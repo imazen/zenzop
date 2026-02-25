@@ -645,6 +645,7 @@ fn calculate_block_symbol_size(
 
 /// Encodes the Huffman tree and returns how many bits its encoding takes; only returns the size
 /// and runs faster.
+#[allow(clippy::too_many_arguments)]
 fn encode_tree_no_output_with_scratch(
     ll_lengths: &[u32],
     d_lengths: &[u32],
@@ -854,6 +855,7 @@ fn calculate_tree_size_with_scratch(
 
 /// Encodes the Huffman tree and returns how many bits its encoding takes and returns output.
 // TODO: This return value is unused.
+#[allow(clippy::too_many_arguments)]
 fn encode_tree<W: Write>(
     ll_lengths: &[u32],
     d_lengths: &[u32],
@@ -1229,24 +1231,23 @@ fn try_optimize_huffman_for_rle_with_scratch(
     scratch: &mut HuffmanScratch,
 ) -> (f64, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
     // Helper: build code lengths from counts, evaluate cost against original frequencies
-    let try_strategy =
-        |ll_c: &[usize; ZOPFLI_NUM_LL],
-         d_c: &[usize; ZOPFLI_NUM_D],
-         max_bits: usize,
-         scratch: &mut HuffmanScratch|
-         -> (usize, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
-            let mut ll_lens = [0u32; ZOPFLI_NUM_LL];
-            let mut d_lens = [0u32; ZOPFLI_NUM_D];
-            length_limited_code_lengths_into(ll_c, max_bits, scratch, &mut ll_lens);
-            length_limited_code_lengths_into(d_c, max_bits, scratch, &mut d_lens);
-            patch_distance_codes_for_buggy_decoders(&mut d_lens[..]);
-            let tree = calculate_tree_size_with_scratch(&ll_lens, &d_lens, enhanced, scratch);
-            // Always measure data cost against original frequencies
-            let data = calculate_block_symbol_size_given_counts(
-                ll_counts, d_counts, &ll_lens, &d_lens, lz77, lstart, lend,
-            );
-            (tree + data, ll_lens, d_lens)
-        };
+    let try_strategy = |ll_c: &[usize; ZOPFLI_NUM_LL],
+                        d_c: &[usize; ZOPFLI_NUM_D],
+                        max_bits: usize,
+                        scratch: &mut HuffmanScratch|
+     -> (usize, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
+        let mut ll_lens = [0u32; ZOPFLI_NUM_LL];
+        let mut d_lens = [0u32; ZOPFLI_NUM_D];
+        length_limited_code_lengths_into(ll_c, max_bits, scratch, &mut ll_lens);
+        length_limited_code_lengths_into(d_c, max_bits, scratch, &mut d_lens);
+        patch_distance_codes_for_buggy_decoders(&mut d_lens[..]);
+        let tree = calculate_tree_size_with_scratch(&ll_lens, &d_lens, enhanced, scratch);
+        // Always measure data cost against original frequencies
+        let data = calculate_block_symbol_size_given_counts(
+            ll_counts, d_counts, &ll_lens, &d_lens, lz77, lstart, lend,
+        );
+        (tree + data, ll_lens, d_lens)
+    };
 
     // Strategy A: existing Zopfli RLE at max_bits=15
     let mut ll_counts_a = *ll_counts;
@@ -1256,8 +1257,7 @@ fn try_optimize_huffman_for_rle_with_scratch(
     let (cost_a, ll_a, d_a) = try_strategy(&ll_counts_a, &d_counts_a, 15, scratch);
 
     // Strategy C: raw counts (no RLE) at max_bits=15
-    let treesize_raw =
-        calculate_tree_size_with_scratch(ll_lengths, d_lengths, enhanced, scratch);
+    let treesize_raw = calculate_tree_size_with_scratch(ll_lengths, d_lengths, enhanced, scratch);
     let datasize_raw = calculate_block_symbol_size_given_counts(
         ll_counts, d_counts, ll_lengths, d_lengths, lz77, lstart, lend,
     );
@@ -1449,8 +1449,13 @@ fn add_lz77_block_auto_type<W: Write>(
             inend,
             &mut fixedstore,
         );
-        fixedcost =
-            calculate_block_size(&fixedstore, 0, fixedstore.size(), BlockType::Fixed, enhanced);
+        fixedcost = calculate_block_size(
+            &fixedstore,
+            0,
+            fixedstore.size(),
+            BlockType::Fixed,
+            enhanced,
+        );
     }
 
     if uncompressedcost <= fixedcost && uncompressedcost <= dyncost {
@@ -1546,7 +1551,16 @@ fn add_all_blocks<W: Write>(
 ) -> Result<(), Error> {
     let mut last = 0;
     for &item in splitpoints {
-        add_lz77_block_auto_type(false, in_data, lz77, last, item, 0, enhanced, bitwise_writer)?;
+        add_lz77_block_auto_type(
+            false,
+            in_data,
+            lz77,
+            last,
+            item,
+            0,
+            enhanced,
+            bitwise_writer,
+        )?;
         last = item;
     }
     add_lz77_block_auto_type(
