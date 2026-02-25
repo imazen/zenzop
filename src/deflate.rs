@@ -442,6 +442,94 @@ fn optimize_huffman_for_rle(counts: &mut [usize]) {
     }
 }
 
+/// Brotli-inspired Huffman frequency optimization for RLE encoding.
+///
+/// Alternative to `optimize_huffman_for_rle` with different smoothing heuristics:
+/// - Zero runs >= 5 are marked as "good for RLE"
+/// - Non-zero runs >= 7 where values are within 1.21x of average are marked
+/// - Marked strides are collapsed to their ceiling average
+fn optimize_huffman_for_rle_brotli(counts: &mut [usize]) {
+    let mut n = counts.len();
+
+    // Trim trailing zeros
+    while n > 0 && counts[n - 1] == 0 {
+        n -= 1;
+    }
+    if n == 0 {
+        return;
+    }
+
+    // Mark which positions are "good for RLE"
+    let mut good_for_rle = [false; ZOPFLI_NUM_LL]; // max counts.len() is 288
+
+    // Mark zero runs >= 5
+    {
+        let mut i = 0;
+        while i < n {
+            if counts[i] == 0 {
+                let start = i;
+                while i < n && counts[i] == 0 {
+                    i += 1;
+                }
+                if i - start >= 5 {
+                    good_for_rle[start..i].fill(true);
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // Mark non-zero runs >= 7 where values are similar
+    {
+        let mut i = 0;
+        while i < n {
+            if counts[i] != 0 {
+                let start = i;
+                let mut sum = 0u64;
+                while i < n && counts[i] != 0 {
+                    sum += counts[i] as u64;
+                    i += 1;
+                }
+                let run_len = i - start;
+                if run_len >= 7 {
+                    let avg = sum / run_len as u64;
+                    // Fixed-point threshold from Brotli: ~1.21x average
+                    let limit = (avg * 1240) >> 10;
+                    let all_similar = counts[start..i]
+                        .iter()
+                        .all(|&c| (c as u64).abs_diff(avg) <= limit);
+                    if all_similar {
+                        good_for_rle[start..i].fill(true);
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // Collapse strides: replace runs of good_for_rle positions with ceiling average
+    {
+        let mut i = 0;
+        while i < n {
+            if good_for_rle[i] {
+                let start = i;
+                let mut sum = 0u64;
+                while i < n && good_for_rle[i] {
+                    sum += counts[i] as u64;
+                    i += 1;
+                }
+                let run_len = (i - start) as u64;
+                let avg = sum.div_ceil(run_len) as usize;
+                counts[start..i].fill(avg);
+            } else {
+                i += 1;
+            }
+        }
+    }
+}
+
 // Ensures there are at least 2 distance codes to support buggy decoders.
 // Zlib 1.2.1 and below have a bug where it fails if there isn't at least 1
 // distance code (with length > 0), even though it's valid according to the
@@ -1125,6 +1213,9 @@ pub fn calculate_block_size(
 /// Tries out `OptimizeHuffmanForRle` for this block, if the result is smaller,
 /// uses it, otherwise keeps the original. Returns size of encoded tree and data in
 /// bits, not including the 3-bit block header.
+///
+/// When `enhanced`, also tries Brotli-inspired RLE and raw counts (no RLE),
+/// plus a max_bits sweep from 14 down to 9 on the winning strategy.
 #[allow(clippy::too_many_arguments)]
 fn try_optimize_huffman_for_rle_with_scratch(
     lz77: &Lz77Store,
@@ -1137,41 +1228,86 @@ fn try_optimize_huffman_for_rle_with_scratch(
     enhanced: bool,
     scratch: &mut HuffmanScratch,
 ) -> (f64, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
-    let mut ll_counts2 = *ll_counts;
-    let mut d_counts2 = *d_counts;
+    // Helper: build code lengths from counts, evaluate cost against original frequencies
+    let try_strategy =
+        |ll_c: &[usize; ZOPFLI_NUM_LL],
+         d_c: &[usize; ZOPFLI_NUM_D],
+         max_bits: usize,
+         scratch: &mut HuffmanScratch|
+         -> (usize, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
+            let mut ll_lens = [0u32; ZOPFLI_NUM_LL];
+            let mut d_lens = [0u32; ZOPFLI_NUM_D];
+            length_limited_code_lengths_into(ll_c, max_bits, scratch, &mut ll_lens);
+            length_limited_code_lengths_into(d_c, max_bits, scratch, &mut d_lens);
+            patch_distance_codes_for_buggy_decoders(&mut d_lens[..]);
+            let tree = calculate_tree_size_with_scratch(&ll_lens, &d_lens, enhanced, scratch);
+            // Always measure data cost against original frequencies
+            let data = calculate_block_symbol_size_given_counts(
+                ll_counts, d_counts, &ll_lens, &d_lens, lz77, lstart, lend,
+            );
+            (tree + data, ll_lens, d_lens)
+        };
 
-    let treesize =
+    // Strategy A: existing Zopfli RLE at max_bits=15
+    let mut ll_counts_a = *ll_counts;
+    let mut d_counts_a = *d_counts;
+    optimize_huffman_for_rle(&mut ll_counts_a);
+    optimize_huffman_for_rle(&mut d_counts_a);
+    let (cost_a, ll_a, d_a) = try_strategy(&ll_counts_a, &d_counts_a, 15, scratch);
+
+    // Strategy C: raw counts (no RLE) at max_bits=15
+    let treesize_raw =
         calculate_tree_size_with_scratch(ll_lengths, d_lengths, enhanced, scratch);
-    let datasize = calculate_block_symbol_size_given_counts(
+    let datasize_raw = calculate_block_symbol_size_given_counts(
         ll_counts, d_counts, ll_lengths, d_lengths, lz77, lstart, lend,
     );
+    let cost_raw = treesize_raw + datasize_raw;
 
-    optimize_huffman_for_rle(&mut ll_counts2);
-    optimize_huffman_for_rle(&mut d_counts2);
-
-    let mut ll_lengths2 = [0u32; ZOPFLI_NUM_LL];
-    let mut d_lengths2 = [0u32; ZOPFLI_NUM_D];
-    length_limited_code_lengths_into(&ll_counts2, 15, scratch, &mut ll_lengths2);
-    length_limited_code_lengths_into(&d_counts2, 15, scratch, &mut d_lengths2);
-    patch_distance_codes_for_buggy_decoders(&mut d_lengths2[..]);
-
-    let treesize2 =
-        calculate_tree_size_with_scratch(&ll_lengths2, &d_lengths2, enhanced, scratch);
-    let datasize2 = calculate_block_symbol_size_given_counts(
-        ll_counts,
-        d_counts,
-        &ll_lengths2,
-        &d_lengths2,
-        lz77,
-        lstart,
-        lend,
-    );
-
-    if treesize2 + datasize2 < treesize + datasize {
-        ((treesize2 + datasize2) as f64, ll_lengths2, d_lengths2)
+    let (mut best_cost, mut best_ll, mut best_d) = if cost_a < cost_raw {
+        (cost_a, ll_a, d_a)
     } else {
-        ((treesize + datasize) as f64, *ll_lengths, *d_lengths)
+        (cost_raw, *ll_lengths, *d_lengths)
+    };
+
+    if enhanced {
+        // Strategy B: Brotli-inspired RLE at max_bits=15
+        let mut ll_counts_b = *ll_counts;
+        let mut d_counts_b = *d_counts;
+        optimize_huffman_for_rle_brotli(&mut ll_counts_b);
+        optimize_huffman_for_rle_brotli(&mut d_counts_b);
+        let (cost_b, ll_b, d_b) = try_strategy(&ll_counts_b, &d_counts_b, 15, scratch);
+        if cost_b < best_cost {
+            best_cost = cost_b;
+            best_ll = ll_b;
+            best_d = d_b;
+        }
+
+        // Max-bits sweep on the best strategy's counts
+        // Determine which counts produced the best result
+        let (sweep_ll_c, sweep_d_c) = if best_cost == cost_a {
+            (ll_counts_a, d_counts_a)
+        } else if best_cost == cost_b {
+            (ll_counts_b, d_counts_b)
+        } else {
+            (*ll_counts, *d_counts)
+        };
+
+        let mut prev_cost = best_cost;
+        for max_bits in (9..=14).rev() {
+            let (cost, ll, d) = try_strategy(&sweep_ll_c, &sweep_d_c, max_bits, scratch);
+            if cost < best_cost {
+                best_cost = cost;
+                best_ll = ll;
+                best_d = d;
+            }
+            if cost > prev_cost {
+                break; // Cost increasing, stop sweep
+            }
+            prev_cost = cost;
+        }
     }
+
+    (best_cost as f64, best_ll, best_d)
 }
 
 /// Calculates the bit lengths for the symbols for dynamic blocks. Zero-allocation
