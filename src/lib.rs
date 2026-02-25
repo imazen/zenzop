@@ -8,6 +8,10 @@
 //! improvements: eliminating redundant hash chain walks, precomputed cost tables, and a buffered
 //! bit writer.
 //!
+//! With [`Options::enhanced`] enabled, zenzop applies ECT-derived optimizations — expanded
+//! precode search, multi-strategy Huffman tree selection, and enhanced parser diversification —
+//! to produce smaller output than standard Zopfli.
+//!
 //! # Features
 //!
 //! This crate exposes the following features. You can enable or disable them in your `Cargo.toml`

@@ -1,9 +1,9 @@
 [package]
 name = "zenzop"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85.0"
-description = "A faster fork of the Zopfli DEFLATE compressor. Drop-in replacement with identical output."
+description = "A faster fork of the Zopfli DEFLATE compressor with optional ECT-derived optimizations."
 repository = "https://github.com/imazen/zenzop"
 readme = "README.md"
 license = "Apache-2.0"
@@ -31,7 +31,7 @@ required-features = ["gzip", "std", "zlib"]
 enough = { version = "0.4", default-features = false }
 log = { version = "0.4.28", optional = true }
 rayon = { version = "1.10", optional = true }
-zenflate = { path = "../zenflate", default-features = false, optional = true }
+zenflate = { version = "0.2.1", path = "../zenflate", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

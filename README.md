@@ -4,9 +4,12 @@ A faster fork of the [Zopfli](https://github.com/google/zopfli) DEFLATE compress
 
 Zopfli produces the smallest possible DEFLATE output at the cost of speed. zenzop produces byte-identical output 2-3x faster through algorithmic improvements: precomputed lookup tables, arena-free Huffman tree construction, pre-allocated stores, and eliminated bounds checks in hot paths.
 
+With `enhanced` mode enabled, zenzop applies ECT-derived optimizations — expanded precode search, multi-strategy Huffman tree selection, and enhanced parser diversification — to produce smaller output than standard Zopfli at the cost of byte-for-byte parity with the C reference.
+
 ## Features
 
-- **Byte-identical output** to the C Zopfli reference implementation
+- **Byte-identical output** to C Zopfli (default mode)
+- **Enhanced mode** for smaller-than-Zopfli output (beats ECT-9 at equivalent iterations)
 - **2-3x faster** than the original Rust port
 - **`no_std` + `alloc`** compatible — works on embedded and WASM targets
 - **Cooperative cancellation** via [`enough::Stop`](https://docs.rs/enough) — cancel long-running compressions cleanly
@@ -19,7 +22,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zenzop = "0.2"
+zenzop = "0.3"
 ```
 
 ### Compress data
@@ -41,6 +44,28 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 ```
+
+### Enhanced mode
+
+```rust
+use std::io;
+
+fn main() -> io::Result<()> {
+    let data = b"Hello, world!";
+    let mut output = Vec::new();
+
+    let options = zenzop::Options {
+        enhanced: true,
+        ..zenzop::Options::default()
+    };
+
+    zenzop::compress(options, zenzop::Format::Gzip, &data[..], &mut output)?;
+
+    Ok(())
+}
+```
+
+Enhanced mode produces smaller DEFLATE output than standard Zopfli with ~5% runtime overhead. At 60 iterations it beats ECT-9 on representative test data.
 
 ### Streaming encoder
 
@@ -92,7 +117,7 @@ For `no_std` usage: `default-features = false`.
 
 ## MSRV
 
-The minimum supported Rust version is **1.82**. Bumping this is not considered a breaking change.
+The minimum supported Rust version is **1.85**. Bumping this is not considered a breaking change.
 
 ## Building from source
 
@@ -115,7 +140,7 @@ Apache-2.0
 
 ## Origin
 
-Forked from [zopfli-rs/zopfli](https://github.com/zopfli-rs/zopfli), which was Carol Nichols' Rust reimplementation of Google's Zopfli. Some optimization ideas borrowed from [ECT](https://github.com/fhanau/Efficient-Compression-Tool) (Efficient Compression Tool).
+Forked from [zopfli-rs/zopfli](https://github.com/zopfli-rs/zopfli), which was Carol Nichols' Rust reimplementation of Google's Zopfli. Enhanced mode optimizations derived from [ECT](https://github.com/fhanau/Efficient-Compression-Tool) (Efficient Compression Tool).
 
 ## AI-Generated Code Notice
 
