@@ -17,7 +17,10 @@ use enough::{Stop, StopReason};
 
 use crate::{
     cache::Cache,
-    deflate::{calculate_block_size_dynamic_with_scratch, optimize_huffman_for_rle},
+    deflate::{
+        calculate_block_cost_from_frequencies, calculate_block_size_dynamic_with_scratch,
+        optimize_huffman_for_rle,
+    },
     hash::ZopfliHash,
     katajainen::{HuffmanScratch, length_limited_code_lengths_into},
     lz77::{LitLen, Lz77Store, find_longest_match},
@@ -205,6 +208,19 @@ impl SymbolStats {
     fn clear_freqs(&mut self) {
         self.litlens = [0; ZOPFLI_NUM_LL];
         self.dists = [0; ZOPFLI_NUM_D];
+    }
+
+    /// Set frequencies from pre-computed counts and calculate entropy.
+    /// Avoids iterating the store when frequencies are already known.
+    fn set_frequencies(
+        &mut self,
+        ll_counts: &[usize; ZOPFLI_NUM_LL],
+        d_counts: &[usize; ZOPFLI_NUM_D],
+    ) {
+        self.litlens = *ll_counts;
+        self.dists = *d_counts;
+        self.litlens[256] = 1; // End symbol
+        self.calculate_entropy();
     }
 
     /// Apply RLE smoothing to a copy of beststats frequencies, build Huffman
@@ -456,6 +472,29 @@ fn trace(size: usize, length_array: &[u16], dist_array: &[u16], path: &mut Vec<(
     }
 }
 
+/// Compute symbol frequencies directly from a trace path, without building an Lz77Store.
+/// The path is in reverse order (end to start). Returns (ll_counts, d_counts).
+fn compute_frequencies_from_path(
+    in_data: &[u8],
+    instart: usize,
+    path: &[(u16, u16)],
+) -> ([usize; ZOPFLI_NUM_LL], [usize; ZOPFLI_NUM_D]) {
+    let mut ll_counts = [0usize; ZOPFLI_NUM_LL];
+    let mut d_counts = [0usize; ZOPFLI_NUM_D];
+    let mut pos = instart;
+    for &(length, dist) in path.iter().rev() {
+        if length >= 3 {
+            ll_counts[get_length_symbol(length as usize)] += 1;
+            d_counts[get_dist_symbol(dist) as usize] += 1;
+        } else {
+            ll_counts[in_data[pos] as usize] += 1;
+        }
+        pos += length as usize;
+    }
+    ll_counts[256] = 1; // End symbol
+    (ll_counts, d_counts)
+}
+
 /// Does a single run for `lz77_optimal`. For good compression, repeated runs
 /// with updated statistics should be performed.
 /// `s`: the block state
@@ -630,38 +669,39 @@ pub fn lz77_optimal<C: Cache>(
             stats.calculate_huffman_costs(&beststats, &mut huffman_scratch);
         }
 
-        currentstore.reset();
         let cost_model = CostModel::from_stats(&stats);
         // After the first iteration populates the match cache, skip hash chain
         // updates on subsequent iterations if the cache has complete sublen data.
         let skip_hash = current_iteration > 0 && lmc.is_sublen_complete();
-        lz77_optimal_run(
+        // Run DP forward pass + trace without building an Lz77Store.
+        // Frequencies and block cost are computed directly from the path.
+        get_best_lengths(
             lmc,
             in_data,
             instart,
             inend,
             |a, b| cost_model.cost(a, b),
-            &mut currentstore,
             &mut h,
             &mut costs,
             &mut length_array,
             &mut dist_array,
             &mut sublen,
-            &mut path_buf,
             skip_hash,
         );
-        let cost = calculate_block_size_dynamic_with_scratch(
-            &currentstore,
-            0,
-            currentstore.size(),
+        trace(inend - instart, &length_array, &dist_array, &mut path_buf);
+        let (ll_freq, d_freq) = compute_frequencies_from_path(in_data, instart, &path_buf);
+        let cost = calculate_block_cost_from_frequencies(
+            &ll_freq,
+            &d_freq,
             enhanced,
             &mut huffman_scratch,
         );
 
         if cost < bestcost {
             iterations_without_improvement = 0;
-            /* Copy to the output store. */
-            outputstore.clone_from(&currentstore);
+            // Build full store only on improvement (needed for block splitting later)
+            outputstore.reset();
+            outputstore.store_from_path(in_data, instart, &path_buf);
             beststats = stats;
             bestcost = cost;
 
@@ -687,32 +727,32 @@ pub fn lz77_optimal<C: Cache>(
             if enhanced && current_iteration > 4 {
                 let mut ultra_stats = SymbolStats::default();
                 ultra_stats.calculate_huffman_costs(&beststats, &mut huffman_scratch);
-                currentstore.reset();
                 let cost_model = CostModel::from_stats(&ultra_stats);
-                lz77_optimal_run(
+                get_best_lengths(
                     lmc,
                     in_data,
                     instart,
                     inend,
                     |a, b| cost_model.cost(a, b),
-                    &mut currentstore,
                     &mut h,
                     &mut costs,
                     &mut length_array,
                     &mut dist_array,
                     &mut sublen,
-                    &mut path_buf,
                     lmc.is_sublen_complete(),
                 );
-                let ultra_cost = calculate_block_size_dynamic_with_scratch(
-                    &currentstore,
-                    0,
-                    currentstore.size(),
+                trace(inend - instart, &length_array, &dist_array, &mut path_buf);
+                let (ultra_ll, ultra_d) =
+                    compute_frequencies_from_path(in_data, instart, &path_buf);
+                let ultra_cost = calculate_block_cost_from_frequencies(
+                    &ultra_ll,
+                    &ultra_d,
                     enhanced,
                     &mut huffman_scratch,
                 );
                 if ultra_cost < bestcost {
-                    outputstore.clone_from(&currentstore);
+                    outputstore.reset();
+                    outputstore.store_from_path(in_data, instart, &path_buf);
                     #[allow(unused_assignments)]
                     {
                         bestcost = ultra_cost;
@@ -724,7 +764,7 @@ pub fn lz77_optimal<C: Cache>(
         }
         let laststats = stats;
         stats.clear_freqs();
-        stats.get_statistics(&currentstore);
+        stats.set_frequencies(&ll_freq, &d_freq);
 
         if lastrandomstep != u64::MAX {
             /* This makes it converge slower but better. Do it only once the

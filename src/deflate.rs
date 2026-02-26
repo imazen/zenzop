@@ -1522,6 +1522,113 @@ pub(crate) fn calculate_block_size_dynamic_with_scratch(
     get_dynamic_lengths_with_scratch(lz77, lstart, lend, enhanced, scratch).0 + 3.0
 }
 
+/// Compute dynamic block cost from pre-computed symbol frequencies.
+/// Used by the squeeze loop to avoid maintaining cumulative histograms.
+/// Only valid for blocks large enough that the small-block fallback is not needed
+/// (size > ZOPFLI_NUM_LL * 3 = 864).
+pub(crate) fn calculate_block_cost_from_frequencies(
+    ll_counts: &[usize; ZOPFLI_NUM_LL],
+    d_counts: &[usize; ZOPFLI_NUM_D],
+    enhanced: bool,
+    scratch: &mut HuffmanScratch,
+) -> f64 {
+    let mut ll_lengths = [0u32; ZOPFLI_NUM_LL];
+    let mut d_lengths = [0u32; ZOPFLI_NUM_D];
+    length_limited_code_lengths_into(ll_counts, 15, scratch, &mut ll_lengths);
+    length_limited_code_lengths_into(d_counts, 15, scratch, &mut d_lengths);
+
+    patch_distance_codes_for_buggy_decoders(&mut d_lengths[..]);
+
+    // Evaluate multiple RLE strategies for tree encoding optimization
+    let try_strategy = |ll_c: &[usize; ZOPFLI_NUM_LL],
+                        d_c: &[usize; ZOPFLI_NUM_D],
+                        max_bits: usize,
+                        scratch: &mut HuffmanScratch|
+     -> (usize, [u32; ZOPFLI_NUM_LL], [u32; ZOPFLI_NUM_D]) {
+        let mut ll_lens = [0u32; ZOPFLI_NUM_LL];
+        let mut d_lens = [0u32; ZOPFLI_NUM_D];
+        length_limited_code_lengths_into(ll_c, max_bits, scratch, &mut ll_lens);
+        length_limited_code_lengths_into(d_c, max_bits, scratch, &mut d_lens);
+        patch_distance_codes_for_buggy_decoders(&mut d_lens[..]);
+        let tree = calculate_tree_size_with_scratch(&ll_lens, &d_lens, enhanced, scratch);
+        let data = block_symbol_cost_from_counts(ll_counts, d_counts, &ll_lens, &d_lens);
+        (tree + data, ll_lens, d_lens)
+    };
+
+    // Strategy A: Zopfli RLE at max_bits=15
+    let mut ll_counts_a = *ll_counts;
+    let mut d_counts_a = *d_counts;
+    optimize_huffman_for_rle(&mut ll_counts_a);
+    optimize_huffman_for_rle(&mut d_counts_a);
+    let (cost_a, _ll_a, _d_a) = try_strategy(&ll_counts_a, &d_counts_a, 15, scratch);
+
+    // Strategy C: raw counts (no RLE) at max_bits=15
+    let treesize_raw = calculate_tree_size_with_scratch(&ll_lengths, &d_lengths, enhanced, scratch);
+    let datasize_raw = block_symbol_cost_from_counts(ll_counts, d_counts, &ll_lengths, &d_lengths);
+    let cost_raw = treesize_raw + datasize_raw;
+
+    let mut best_cost = cost_a.min(cost_raw);
+
+    if enhanced {
+        // Strategy B: Brotli-inspired RLE at max_bits=15
+        let mut ll_counts_b = *ll_counts;
+        let mut d_counts_b = *d_counts;
+        optimize_huffman_for_rle_brotli(&mut ll_counts_b);
+        optimize_huffman_for_rle_brotli(&mut d_counts_b);
+        let (cost_b, _, _) = try_strategy(&ll_counts_b, &d_counts_b, 15, scratch);
+        if cost_b < best_cost {
+            best_cost = cost_b;
+        }
+
+        // Max-bits sweep on the best strategy's counts
+        let (sweep_ll_c, sweep_d_c) = if best_cost == cost_a {
+            (ll_counts_a, d_counts_a)
+        } else if best_cost == cost_b {
+            (ll_counts_b, d_counts_b)
+        } else {
+            (*ll_counts, *d_counts)
+        };
+
+        let mut prev_cost = best_cost;
+        for max_bits in (9..=14).rev() {
+            let (cost, _, _) = try_strategy(&sweep_ll_c, &sweep_d_c, max_bits, scratch);
+            if cost < best_cost {
+                best_cost = cost;
+            }
+            if cost > prev_cost {
+                break;
+            }
+            prev_cost = cost;
+        }
+    }
+
+    best_cost as f64 + 3.0
+}
+
+/// Compute block symbol cost from pre-computed counts and lengths.
+/// This is the "large block" path — no store access needed.
+fn block_symbol_cost_from_counts(
+    ll_counts: &[usize; ZOPFLI_NUM_LL],
+    d_counts: &[usize; ZOPFLI_NUM_D],
+    ll_lengths: &[u32],
+    d_lengths: &[u32],
+) -> usize {
+    let mut result = 0u32;
+    for i in 0..256 {
+        result += ll_lengths[i] * ll_counts[i] as u32;
+    }
+    for i in 257..286 {
+        result += ll_lengths[i] * ll_counts[i] as u32;
+        result += (get_length_symbol_extra_bits(i) as usize * ll_counts[i]) as u32;
+    }
+    for i in 0..30 {
+        result += d_lengths[i] * d_counts[i] as u32;
+        result += (get_dist_symbol_extra_bits(i) as usize * d_counts[i]) as u32;
+    }
+    result += ll_lengths[256]; // end symbol
+    result as usize
+}
+
 /// Zero-allocation version of `calculate_block_size_auto_type`.
 pub fn calculate_block_size_auto_type_with_scratch(
     lz77: &Lz77Store,
