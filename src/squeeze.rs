@@ -633,8 +633,8 @@ pub fn lz77_optimal<C: Cache>(
         currentstore.reset();
         let cost_model = CostModel::from_stats(&stats);
         // After the first iteration populates the match cache, skip hash chain
-        // updates on subsequent iterations — all lookups return from cache.
-        let skip_hash = false;
+        // updates on subsequent iterations if the cache has complete sublen data.
+        let skip_hash = current_iteration > 0 && lmc.is_sublen_complete();
         lz77_optimal_run(
             lmc,
             in_data,
@@ -702,7 +702,7 @@ pub fn lz77_optimal<C: Cache>(
                     &mut dist_array,
                     &mut sublen,
                     &mut path_buf,
-                    false,
+                    lmc.is_sublen_complete(),
                 );
                 let ultra_cost = calculate_block_size_dynamic_with_scratch(
                     &currentstore,

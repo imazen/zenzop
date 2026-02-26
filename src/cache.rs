@@ -16,6 +16,10 @@ pub struct ZopfliLongestMatchCache {
     length: Vec<u16>,
     dist: Vec<u16>,
     sublen: Vec<u8>,
+    /// True if all positions have complete sublen data in the cache.
+    /// When true, subsequent iterations never need `find_longest_match_loop`
+    /// and can safely skip hash chain updates.
+    sublen_complete: bool,
 }
 
 impl ZopfliLongestMatchCache {
@@ -27,6 +31,7 @@ impl ZopfliLongestMatchCache {
             dist: vec![0; blocksize],
             /* Rather large amount of memory. */
             sublen: vec![0; ZOPFLI_CACHE_LENGTH * blocksize * 3],
+            sublen_complete: true, // Assumed true until a store_sublen overflows
         }
     }
 
@@ -83,6 +88,7 @@ impl ZopfliLongestMatchCache {
             debug_assert_eq!(bestlength, length as u32);
             self.sublen[start + ((ZOPFLI_CACHE_LENGTH - 1) * 3)] = (bestlength - 3) as u8;
         } else {
+            self.sublen_complete = false;
             debug_assert!(bestlength <= length as u32);
         }
         debug_assert_eq!(bestlength, self.max_sublen(pos));
@@ -133,6 +139,9 @@ pub trait Cache {
         length: u16,
         blockstart: usize,
     );
+    /// Returns true if the cache has complete sublen data for all stored positions.
+    /// When true, subsequent lookups will never fall through to `find_longest_match_loop`.
+    fn is_sublen_complete(&self) -> bool;
 }
 
 pub struct NoCache;
@@ -146,6 +155,10 @@ impl Cache for NoCache {
         _: usize,
     ) -> LongestMatch {
         LongestMatch::new(limit)
+    }
+
+    fn is_sublen_complete(&self) -> bool {
+        false // No cache means hash chains are always needed
     }
 
     fn store(&mut self, _: usize, _: usize, _: &mut Option<&mut [u16]>, _: u16, _: u16, _: usize) {
@@ -208,7 +221,7 @@ impl Cache for ZopfliLongestMatchCache {
     fn store(
         &mut self,
         pos: usize,
-        limit: usize,
+        _limit: usize,
         sublen: &mut Option<&mut [u16]>,
         distance: u16,
         length: u16,
@@ -220,7 +233,7 @@ impl Cache for ZopfliLongestMatchCache {
             let lmcpos = pos - blockstart;
             let cache_available = self.length_at(lmcpos) == 0 || self.dist_at(lmcpos) != 0;
 
-            if limit == ZOPFLI_MAX_MATCH && !cache_available {
+            if !cache_available {
                 debug_assert!(self.length_at(lmcpos) == 1 && self.dist_at(lmcpos) == 0);
                 if length < ZOPFLI_MIN_MATCH as u16 {
                     self.store_dist_at(lmcpos, 0);
@@ -233,5 +246,9 @@ impl Cache for ZopfliLongestMatchCache {
                 self.store_sublen(subl, lmcpos, length as usize);
             }
         }
+    }
+
+    fn is_sublen_complete(&self) -> bool {
+        self.sublen_complete
     }
 }
