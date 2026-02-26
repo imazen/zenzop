@@ -17,7 +17,7 @@ use enough::{Stop, StopReason};
 
 use crate::{
     cache::Cache,
-    deflate::{BlockType, calculate_block_size, optimize_huffman_for_rle},
+    deflate::{calculate_block_size_dynamic_with_scratch, optimize_huffman_for_rle},
     hash::ZopfliHash,
     katajainen::{HuffmanScratch, length_limited_code_lengths_into},
     lz77::{LitLen, Lz77Store, find_longest_match},
@@ -311,6 +311,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     length_array: &mut Vec<u16>,
     dist_array: &mut Vec<u16>,
     sublen: &mut Vec<u16>,
+    skip_hash: bool,
 ) -> f64 {
     // Best cost to get here so far.
     let blocksize = inend - instart;
@@ -323,11 +324,20 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     }
     let windowstart = instart.saturating_sub(ZOPFLI_WINDOW_SIZE);
 
-    h.reset();
     let arr = &in_data[..inend];
-    h.warmup(arr, windowstart, inend);
-    for i in windowstart..instart {
-        h.update(arr, i);
+    if skip_hash {
+        // On cached iterations, only reset and recompute the `same` array.
+        // Hash chains are not needed — all match lookups return from cache.
+        h.reset_same_only();
+        for i in windowstart..instart {
+            h.update_same_only(arr, i);
+        }
+    } else {
+        h.reset();
+        h.warmup(arr, windowstart, inend);
+        for i in windowstart..instart {
+            h.update(arr, i);
+        }
     }
 
     costs.resize(blocksize + 1, 0.0);
@@ -343,7 +353,11 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     let mincost = get_cost_model_min_cost(&costmodel);
     while i < inend {
         let mut j = i - instart; // Index in the costs array and length_array.
-        h.update(arr, i);
+        if skip_hash {
+            h.update_same_only(arr, i);
+        } else {
+            h.update(arr, i);
+        }
 
         // If we're in a long repetition of the same character and have more than
         // ZOPFLI_MAX_MATCH characters before and after our position.
@@ -363,7 +377,11 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
                 dist_array[j + ZOPFLI_MAX_MATCH] = 1;
                 i += 1;
                 j += 1;
-                h.update(arr, i);
+                if skip_hash {
+                    h.update_same_only(arr, i);
+                } else {
+                    h.update(arr, i);
+                }
             }
         }
 
@@ -419,12 +437,12 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
 /// Calculates the optimal path of lz77 lengths to use, from the calculated
 /// `length_array` and `dist_array`. Returns (length, dist) pairs in reverse order
 /// (from end to start).
-fn trace(size: usize, length_array: &[u16], dist_array: &[u16]) -> Vec<(u16, u16)> {
-    let mut index = size;
+fn trace(size: usize, length_array: &[u16], dist_array: &[u16], path: &mut Vec<(u16, u16)>) {
+    path.clear();
     if size == 0 {
-        return vec![];
+        return;
     }
-    let mut path = Vec::with_capacity(index);
+    let mut index = size;
 
     while index > 0 {
         let lai = length_array[index];
@@ -436,8 +454,6 @@ fn trace(size: usize, length_array: &[u16], dist_array: &[u16]) -> Vec<(u16, u16
         debug_assert_ne!(lai, 0);
         index -= laiu;
     }
-
-    path
 }
 
 /// Does a single run for `lz77_optimal`. For good compression, repeated runs
@@ -464,6 +480,8 @@ fn lz77_optimal_run<F: Fn(usize, u16) -> f64, C: Cache>(
     length_array: &mut Vec<u16>,
     dist_array: &mut Vec<u16>,
     sublen: &mut Vec<u16>,
+    path_buf: &mut Vec<(u16, u16)>,
+    skip_hash: bool,
 ) {
     let cost = get_best_lengths(
         lmc,
@@ -476,9 +494,10 @@ fn lz77_optimal_run<F: Fn(usize, u16) -> f64, C: Cache>(
         length_array,
         dist_array,
         sublen,
+        skip_hash,
     );
-    let path = trace(inend - instart, length_array, dist_array);
-    store.store_from_path(in_data, instart, path);
+    trace(inend - instart, length_array, dist_array, path_buf);
+    store.store_from_path(in_data, instart, path_buf);
     debug_assert!(cost < f64::INFINITY);
 }
 
@@ -501,6 +520,7 @@ pub fn lz77_optimal_fixed<C: Cache>(
     let mut length_array = Vec::new();
     let mut dist_array = Vec::new();
     let mut sublen = Vec::new();
+    let mut path_buf = Vec::new();
     lz77_optimal_run(
         lmc,
         in_data,
@@ -513,6 +533,8 @@ pub fn lz77_optimal_fixed<C: Cache>(
         &mut length_array,
         &mut dist_array,
         &mut sublen,
+        &mut path_buf,
+        false,
     );
 }
 
@@ -540,16 +562,20 @@ pub fn lz77_optimal<C: Cache>(
     let mut stats = SymbolStats::default();
     stats.get_statistics(&currentstore);
 
+    // Scratch buffer for Huffman code length calculation (reused for milestone RLE
+    // and per-iteration block size calculation)
+    let mut huffman_scratch = HuffmanScratch::new();
+
     // Seed outputstore with the greedy result so that even zero completed
     // squeeze iterations returns valid output on budget exhaustion.
     outputstore.clone_from(&currentstore);
     // Seed bestcost with enhanced cost model for consistent comparison
-    let mut bestcost = calculate_block_size(
+    let mut bestcost = calculate_block_size_dynamic_with_scratch(
         &currentstore,
         0,
         currentstore.size(),
-        BlockType::Dynamic,
         enhanced,
+        &mut huffman_scratch,
     );
 
     let mut h = ZopfliHash::new();
@@ -557,6 +583,7 @@ pub fn lz77_optimal<C: Cache>(
     let mut length_array = Vec::new();
     let mut dist_array = Vec::new();
     let mut sublen = Vec::new();
+    let mut path_buf = Vec::new();
 
     let mut beststats = SymbolStats::default();
 
@@ -580,13 +607,6 @@ pub fn lz77_optimal<C: Cache>(
     let mut diversification_attempts: u64 = 0;
     let mut checkpoint: Option<SymbolStats> = None;
 
-    // Scratch buffer for Huffman code length calculation in milestone RLE
-    let mut huffman_scratch = if enhanced {
-        Some(HuffmanScratch::new())
-    } else {
-        None
-    };
-
     /* Do regular deflate, then loop multiple shortest path runs, each time using
     the statistics of the previous run. */
     /* Repeat statistics with each time the cost model from the previous stat
@@ -607,13 +627,14 @@ pub fn lz77_optimal<C: Cache>(
         // to Huffman code-length cost model for more accurate costs.
         // Only trigger on longer runs where there's time to recover.
         if enhanced && current_iteration == 29 {
-            if let Some(ref mut scratch) = huffman_scratch {
-                stats.calculate_huffman_costs(&beststats, scratch);
-            }
+            stats.calculate_huffman_costs(&beststats, &mut huffman_scratch);
         }
 
         currentstore.reset();
         let cost_model = CostModel::from_stats(&stats);
+        // After the first iteration populates the match cache, skip hash chain
+        // updates on subsequent iterations — all lookups return from cache.
+        let skip_hash = false;
         lz77_optimal_run(
             lmc,
             in_data,
@@ -626,13 +647,15 @@ pub fn lz77_optimal<C: Cache>(
             &mut length_array,
             &mut dist_array,
             &mut sublen,
+            &mut path_buf,
+            skip_hash,
         );
-        let cost = calculate_block_size(
+        let cost = calculate_block_size_dynamic_with_scratch(
             &currentstore,
             0,
             currentstore.size(),
-            BlockType::Dynamic,
             enhanced,
+            &mut huffman_scratch,
         );
 
         if cost < bestcost {
@@ -662,39 +685,39 @@ pub fn lz77_optimal<C: Cache>(
             // Enhanced: ultra mode — one additional pass with Huffman code-length
             // cost model derived from the best result.
             if enhanced && current_iteration > 4 {
-                if let Some(ref mut scratch) = huffman_scratch {
-                    let mut ultra_stats = SymbolStats::default();
-                    ultra_stats.calculate_huffman_costs(&beststats, scratch);
-                    currentstore.reset();
-                    let cost_model = CostModel::from_stats(&ultra_stats);
-                    lz77_optimal_run(
-                        lmc,
-                        in_data,
-                        instart,
-                        inend,
-                        |a, b| cost_model.cost(a, b),
-                        &mut currentstore,
-                        &mut h,
-                        &mut costs,
-                        &mut length_array,
-                        &mut dist_array,
-                        &mut sublen,
-                    );
-                    let ultra_cost = calculate_block_size(
-                        &currentstore,
-                        0,
-                        currentstore.size(),
-                        BlockType::Dynamic,
-                        enhanced,
-                    );
-                    if ultra_cost < bestcost {
-                        outputstore.clone_from(&currentstore);
-                        #[allow(unused_assignments)]
-                        {
-                            bestcost = ultra_cost;
-                        }
-                        debug!("Ultra pass: {ultra_cost} bit");
+                let mut ultra_stats = SymbolStats::default();
+                ultra_stats.calculate_huffman_costs(&beststats, &mut huffman_scratch);
+                currentstore.reset();
+                let cost_model = CostModel::from_stats(&ultra_stats);
+                lz77_optimal_run(
+                    lmc,
+                    in_data,
+                    instart,
+                    inend,
+                    |a, b| cost_model.cost(a, b),
+                    &mut currentstore,
+                    &mut h,
+                    &mut costs,
+                    &mut length_array,
+                    &mut dist_array,
+                    &mut sublen,
+                    &mut path_buf,
+                    false,
+                );
+                let ultra_cost = calculate_block_size_dynamic_with_scratch(
+                    &currentstore,
+                    0,
+                    currentstore.size(),
+                    enhanced,
+                    &mut huffman_scratch,
+                );
+                if ultra_cost < bestcost {
+                    outputstore.clone_from(&currentstore);
+                    #[allow(unused_assignments)]
+                    {
+                        bestcost = ultra_cost;
                     }
+                    debug!("Ultra pass: {ultra_cost} bit");
                 }
             }
             break;

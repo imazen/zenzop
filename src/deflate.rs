@@ -1512,7 +1512,7 @@ fn add_lz77_block_auto_type<W: Write>(
 }
 
 /// Zero-allocation version of `calculate_block_size` for the Dynamic case.
-fn calculate_block_size_dynamic_with_scratch(
+pub(crate) fn calculate_block_size_dynamic_with_scratch(
     lz77: &Lz77Store,
     lstart: usize,
     lend: usize,

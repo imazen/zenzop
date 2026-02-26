@@ -246,7 +246,7 @@ impl Lz77Store {
     /// Builds the LZ77 store from precomputed (length, dist) pairs.
     /// The path is in reverse order (from end to start of block).
     /// This avoids the expensive hash chain re-walk that `follow_path` requires.
-    pub fn store_from_path(&mut self, in_data: &[u8], instart: usize, path: Vec<(u16, u16)>) {
+    pub fn store_from_path(&mut self, in_data: &[u8], instart: usize, path: &[(u16, u16)]) {
         let mut pos = instart;
         for &(length, dist) in path.iter().rev() {
             if length >= ZOPFLI_MIN_MATCH as u16 {
