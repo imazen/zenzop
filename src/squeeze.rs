@@ -341,14 +341,10 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     let windowstart = instart.saturating_sub(ZOPFLI_WINDOW_SIZE);
 
     let arr = &in_data[..inend];
-    if skip_hash {
-        // On cached iterations, only reset and recompute the `same` array.
-        // Hash chains are not needed — all match lookups return from cache.
-        h.reset_same_only();
-        for i in windowstart..instart {
-            h.update_same_only(arr, i);
-        }
-    } else {
+    if !skip_hash {
+        // Only iteration 0 needs full hash chain setup.
+        // On cached iterations (skip_hash=true), all match lookups return from
+        // cache — neither hash chains nor the `same` array are needed.
         h.reset();
         h.warmup(arr, windowstart, inend);
         for i in windowstart..instart {
@@ -369,15 +365,15 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     let mincost = get_cost_model_min_cost(&costmodel);
     while i < inend {
         let mut j = i - instart; // Index in the costs array and length_array.
-        if skip_hash {
-            h.update_same_only(arr, i);
-        } else {
+        if !skip_hash {
             h.update(arr, i);
         }
 
         // If we're in a long repetition of the same character and have more than
         // ZOPFLI_MAX_MATCH characters before and after our position.
-        if h.same[i & ZOPFLI_WINDOW_MASK] > ZOPFLI_MAX_MATCH as u16 * 2
+        // Skip this shortcut on cached iterations — `same` is not maintained.
+        if !skip_hash
+            && h.same[i & ZOPFLI_WINDOW_MASK] > ZOPFLI_MAX_MATCH as u16 * 2
             && i > instart + ZOPFLI_MAX_MATCH + 1
             && i + ZOPFLI_MAX_MATCH * 2 + 1 < inend
             && h.same[(i - ZOPFLI_MAX_MATCH) & ZOPFLI_WINDOW_MASK] > ZOPFLI_MAX_MATCH as u16
@@ -393,11 +389,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
                 dist_array[j + ZOPFLI_MAX_MATCH] = 1;
                 i += 1;
                 j += 1;
-                if skip_hash {
-                    h.update_same_only(arr, i);
-                } else {
-                    h.update(arr, i);
-                }
+                h.update(arr, i);
             }
         }
 

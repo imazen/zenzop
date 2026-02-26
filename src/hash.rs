@@ -95,12 +95,6 @@ impl ZopfliHash {
         self.same.fill(0);
     }
 
-    /// Reset only the `same` array, leaving hash chains untouched.
-    /// Used on cached iterations where hash chains are not needed.
-    pub fn reset_same_only(&mut self) {
-        self.same.fill(0);
-    }
-
     pub fn warmup(&mut self, arr: &[u8], pos: usize, end: usize) {
         let c = arr[pos];
         self.update_val(c);
@@ -134,14 +128,6 @@ impl ZopfliHash {
         self.hash2.val = (amount.wrapping_sub(ZOPFLI_MIN_MATCH as u16) & 255) ^ self.hash1.val;
 
         self.hash2.update(hpos);
-    }
-
-    /// Update only the `same` array without touching hash chains.
-    /// Used on cached iterations where all match lookups hit the cache
-    /// and hash chains are not consulted.
-    pub fn update_same_only(&mut self, array: &[u8], pos: usize) {
-        let hpos = pos & ZOPFLI_WINDOW_MASK;
-        self.same[hpos] = Self::compute_same(array, pos, &self.same);
     }
 
     /// Compute the run-length of identical bytes starting at `pos`.
