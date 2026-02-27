@@ -1,5 +1,11 @@
 # zenzop
 
+[![CI](https://github.com/imazen/zenzop/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/zenzop/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/zenzop.svg)](https://crates.io/crates/zenzop)
+[![docs.rs](https://docs.rs/zenzop/badge.svg)](https://docs.rs/zenzop)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![MSRV: 1.85](https://img.shields.io/badge/MSRV-1.85-blue.svg)](https://blog.rust-lang.org/)
+
 A faster fork of the [Zopfli](https://github.com/google/zopfli) DEFLATE compressor, written in Rust.
 
 Zopfli produces the smallest possible DEFLATE output at the cost of speed. zenzop produces byte-identical output 2-3x faster through algorithmic improvements: precomputed lookup tables, arena-free Huffman tree construction, pre-allocated stores, and eliminated bounds checks in hot paths.
@@ -54,10 +60,8 @@ fn main() -> io::Result<()> {
     let data = b"Hello, world!";
     let mut output = Vec::new();
 
-    let options = zenzop::Options {
-        enhanced: true,
-        ..zenzop::Options::default()
-    };
+    let mut options = zenzop::Options::default();
+    options.enhanced = true;
 
     zenzop::compress(options, zenzop::Format::Gzip, &data[..], &mut output)?;
 
