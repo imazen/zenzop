@@ -38,11 +38,13 @@ impl<W> CompressResult<W> {
     /// Returns `true` if compression completed all squeeze iterations.
     /// Returns `false` if a stop signal caused early termination with
     /// the best result found so far.
+    #[must_use]
     pub fn fully_optimized(&self) -> bool {
         self.fully_optimized
     }
 
     /// Unwraps the inner writer.
+    #[must_use]
     pub fn into_inner(self) -> W {
         self.inner
     }
@@ -60,6 +62,20 @@ impl<W> CompressResult<W> {
 /// by the [`new_buffered`](DeflateEncoder::new_buffered) method. An adequate write size
 /// would be >32 KiB, which allows the second complete chunk to leverage a full-sized
 /// backreference window.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Write;
+/// use zenzop::{Options, DeflateEncoder};
+///
+/// let data = b"Hello, World! Hello, World! Hello, World!";
+/// let mut compressed = Vec::new();
+/// let mut encoder = DeflateEncoder::new(Options::default(), &mut compressed);
+/// encoder.write_all(data).unwrap();
+/// encoder.finish().unwrap();
+/// assert!(!compressed.is_empty());
+/// ```
 pub struct DeflateEncoder<W: Write, S: Stop = enough::Unstoppable> {
     options: Options,
     have_chunk: bool,
@@ -199,6 +215,10 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
     }
 
     /// Gets a reference to the underlying writer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after [`finish()`](Self::finish).
     pub fn get_ref(&self) -> &W {
         &self.bitwise_writer.as_ref().unwrap().out
     }
@@ -207,8 +227,22 @@ impl<W: Write, S: Stop> DeflateEncoder<W, S> {
     ///
     /// Note that mutating the output/input state of the stream may corrupt
     /// this object, so care must be taken when using this method.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after [`finish()`](Self::finish).
     pub fn get_mut(&mut self) -> &mut W {
         &mut self.bitwise_writer.as_mut().unwrap().out
+    }
+}
+
+impl<W: Write, S: Stop> core::fmt::Debug for DeflateEncoder<W, S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DeflateEncoder")
+            .field("options", &self.options)
+            .field("have_chunk", &self.have_chunk)
+            .field("fully_optimized", &self.fully_optimized)
+            .finish_non_exhaustive()
     }
 }
 
@@ -317,6 +351,7 @@ fn deflate_part<W: Write>(
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Debug)]
 #[cfg_attr(all(test, feature = "std"), derive(proptest_derive::Arbitrary))]
 #[derive(Default)]
+#[non_exhaustive]
 pub enum BlockType {
     /// Non-compressed blocks (BTYPE=00).
     ///

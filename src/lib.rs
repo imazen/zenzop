@@ -102,8 +102,24 @@ fn stop_to_error(_reason: StopReason) -> Error {
 }
 
 /// Options for the Zopfli compression algorithm.
+///
+/// # Examples
+///
+/// ```
+/// use zenzop::Options;
+/// use core::num::NonZeroU64;
+///
+/// // Use defaults (15 iterations)
+/// let opts = Options::default();
+/// assert_eq!(opts.iteration_count.get(), 15);
+///
+/// // Customize iteration count for faster compression
+/// let mut opts = Options::default();
+/// opts.iteration_count = NonZeroU64::new(5).unwrap();
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(all(test, feature = "std"), derive(proptest_derive::Arbitrary))]
+#[non_exhaustive]
 pub struct Options {
     /// Maximum amount of times to rerun forward and backward pass to optimize LZ77
     /// compression cost.
@@ -160,8 +176,9 @@ impl Default for Options {
 }
 
 /// The output file format to use to store data compressed with Zopfli.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg(feature = "std")]
+#[non_exhaustive]
 pub enum Format {
     /// The gzip file format, as defined in
     /// [RFC 1952](https://datatracker.ietf.org/doc/html/rfc1952).
@@ -189,6 +206,17 @@ pub enum Format {
 
 /// Compresses data from a source with the Zopfli algorithm, using the specified
 /// options, and writes the result to a sink in the defined output format.
+///
+/// # Examples
+///
+/// ```
+/// use zenzop::{Options, Format};
+///
+/// let data = b"The quick brown fox jumps over the lazy dog";
+/// let mut compressed = Vec::new();
+/// zenzop::compress(Options::default(), Format::Deflate, &data[..], &mut compressed).unwrap();
+/// assert!(!compressed.is_empty());
+/// ```
 #[cfg(feature = "std")]
 pub fn compress<R: std::io::Read, W: Write>(
     options: Options,

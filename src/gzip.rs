@@ -115,6 +115,10 @@ impl<W: Write, S: Stop> GzipEncoder<W, S> {
     }
 
     /// Gets a reference to the underlying writer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after [`finish()`](Self::finish).
     pub fn get_ref(&self) -> &W {
         self.deflate_encoder.as_ref().unwrap().get_ref()
     }
@@ -123,8 +127,20 @@ impl<W: Write, S: Stop> GzipEncoder<W, S> {
     ///
     /// Note that mutating the output/input state of the stream may corrupt
     /// this object, so care must be taken when using this method.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after [`finish()`](Self::finish).
     pub fn get_mut(&mut self) -> &mut W {
         self.deflate_encoder.as_mut().unwrap().get_mut()
+    }
+}
+
+impl<W: Write, S: Stop> core::fmt::Debug for GzipEncoder<W, S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("GzipEncoder")
+            .field("input_size", &self.input_size)
+            .finish_non_exhaustive()
     }
 }
 
