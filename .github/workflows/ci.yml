@@ -72,11 +72,6 @@ jobs:
             runner: windows-latest
             toolchain: stable
 
-          # ── MSRV check ──
-          - name: MSRV (1.85)
-            runner: ubuntu-latest
-            toolchain: "1.85.0"
-
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -160,4 +155,19 @@ jobs:
         with:
           files: lcov.info
           fail_ci_if_error: false
+
+  # ── MSRV check ────────────────────────────────────────────────────────
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
+      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@cargo-hack
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check MSRV (from Cargo.toml rust-version)
+        run: cargo hack check --rust-version
 
