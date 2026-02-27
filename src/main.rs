@@ -13,11 +13,9 @@ fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(15);
-    let options = zenzop::Options {
-        enhanced,
-        iteration_count: core::num::NonZeroU64::new(iterations).unwrap(),
-        ..zenzop::Options::default()
-    };
+    let mut options = zenzop::Options::default();
+    options.enhanced = enhanced;
+    options.iteration_count = core::num::NonZeroU64::new(iterations).unwrap();
     let output_type = zenzop::Format::Gzip;
 
     // TODO: CLI arguments
@@ -27,6 +25,7 @@ fn main() {
         zenzop::Format::Gzip => ".gz",
         zenzop::Format::Zlib => ".zlib",
         zenzop::Format::Deflate => ".deflate",
+        _ => ".bin",
     };
 
     for filename in env::args().skip(1) {
