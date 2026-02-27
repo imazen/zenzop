@@ -63,13 +63,13 @@ jobs:
             runner: ubuntu-24.04-arm
             toolchain: stable
           - name: macOS arm64
-            runner: macos-latest
+            runner: macos-15
             toolchain: stable
           - name: macOS x86_64
-            runner: macos-13
+            runner: macos-15-intel
             toolchain: stable
           - name: Windows x86_64
-            runner: windows-latest
+            runner: windows-2025
             toolchain: stable
 
           # ── MSRV check ──
