@@ -2,7 +2,7 @@
 name = "zenzop"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.89"
 description = "A faster fork of the Zopfli DEFLATE compressor with optional ECT-derived optimizations."
 repository = "https://github.com/imazen/zenzop"
 readme = "README.md"
