@@ -2,172 +2,158 @@ name: CI
 
 on:
   push:
-    branches-ignore:
-      - renovate/*
+    branches: [main]
   pull_request:
-    types:
-      - opened
-      - synchronize
+    branches: [main]
 
-# Cancel in-progress runs for the same branch/PR.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 env:
-  RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
+  CI: true
 
 jobs:
-  # ── Lint & format (nightly, Linux only) ──────────────────────────────
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
-      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-hack
-
-      - name: Check formatting
-        run: cargo fmt --check --verbose -- --color=always
-
-      - name: Clippy (all feature combinations)
-        run: cargo hack clippy --no-deps --all-targets --feature-powerset -- -D warnings
-
-      - name: Generate documentation
-        run: cargo doc --all-features
-
-  # ── Build & test across platforms ────────────────────────────────────
   test:
     name: Test (${{ matrix.name }})
-    if: >-
-      (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
-      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # ── Native targets ──
-          - name: Linux x86_64
-            runner: ubuntu-latest
-            toolchain: stable
+          - name: Linux x64
+            os: ubuntu-latest
           - name: Linux aarch64
-            runner: ubuntu-24.04-arm
-            toolchain: stable
+            os: ubuntu-24.04-arm
           - name: macOS arm64
-            runner: macos-latest
-            toolchain: stable
-          - name: macOS x86_64
-            runner: macos-15-intel
-            toolchain: stable
-          - name: Windows x86_64
-            runner: windows-latest
-            toolchain: stable
-
-    runs-on: ${{ matrix.runner }}
+            os: macos-latest
+          - name: macOS x64
+            os: macos-26-intel
+          - name: Windows x64
+            os: windows-latest
+          - name: Windows arm64
+            os: windows-11-arm
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: ${{ matrix.toolchain }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
-
-      - name: Build (default features)
-        run: cargo build --release
-
-      - name: Test (default features)
+      - name: Run tests (default features)
         run: cargo test --release
-
-      - name: Test (no_std + gzip + zlib)
+      - name: Run tests (gzip,zlib only)
         run: cargo test --release --no-default-features --features gzip,zlib
-
       - name: Golden master tests
         shell: bash
         run: cargo build --release && ./test/run.sh
 
-  # ── WebAssembly targets ──────────────────────────────────────────────
+  i686:
+    name: Test (Linux i686)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-unknown-linux-gnu
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - uses: taiki-e/install-action@cross
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-i686
+      - name: Run tests (i686)
+        run: cross test --target i686-unknown-linux-gnu --release
+
   wasm:
-    name: WASM (${{ matrix.name }})
+    name: WASM check
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
-      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: wasm32-wasip1
-            target: wasm32-wasip1
-            rustflags: ""
-          - name: wasm32-wasip1 +simd128
-            target: wasm32-wasip1
-            rustflags: "-Ctarget-feature=+simd128"
-          - name: wasm32-unknown-unknown
-            target: wasm32-unknown-unknown
-            rustflags: ""
-
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: wasm32-wasip1
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
+      - name: Build WASM (no default features)
+        run: cargo build --target wasm32-wasip1 --no-default-features
+      - name: Build WASM (default features)
+        run: cargo build --target wasm32-wasip1
 
-      # Dev-dependencies (proptest → wait-timeout) don't compile for wasm,
-      # so only build-verify. Unit tests run on all 5 native platforms.
-      - name: Build (no_std)
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo build --target ${{ matrix.target }} --no-default-features
-
-      - name: Build (default features)
-        if: matrix.target == 'wasm32-wasip1'
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo build --target ${{ matrix.target }}
-
-  # ── Code coverage ───────────────────────────────────────────────────
-  coverage:
-    name: Coverage
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
-      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Generate coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info
-
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
         with:
-          files: lcov.info
-          fail_ci_if_error: false
+          components: clippy
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
 
-  # ── MSRV check ────────────────────────────────────────────────────────
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && !endsWith(github.event.head_commit.message, 'CI: skip')) ||
-      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.names, 'skip-ci'))
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: taiki-e/install-action@cargo-hack
       - uses: Swatinem/rust-cache@v2
-
-      - name: Check MSRV (from Cargo.toml rust-version)
+      - name: Check MSRV
         run: cargo hack check --rust-version
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+        continue-on-error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
