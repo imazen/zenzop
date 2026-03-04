@@ -42,6 +42,7 @@ jobs:
         run: |
           sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+          rm -f Cargo.lock
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
         run: cargo test --release
@@ -64,6 +65,7 @@ jobs:
         run: |
           sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+          rm -f Cargo.lock
       - uses: taiki-e/install-action@cross
       - uses: Swatinem/rust-cache@v2
         with:
@@ -84,6 +86,7 @@ jobs:
         run: |
           sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+          rm -f Cargo.lock
       - uses: Swatinem/rust-cache@v2
       - name: Build WASM (no default features)
         run: cargo build --target wasm32-wasip1 --no-default-features
@@ -103,6 +106,7 @@ jobs:
         run: |
           sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+          rm -f Cargo.lock
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -129,6 +133,7 @@ jobs:
         run: |
           sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+          rm -f Cargo.lock
       - uses: taiki-e/install-action@cargo-hack
       - uses: Swatinem/rust-cache@v2
       - name: Check MSRV
@@ -145,6 +150,7 @@ jobs:
         run: |
           sed 's|path = "\.\./zenflate"|git = "https://github.com/imazen/zenflate"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+          rm -f Cargo.lock
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - name: Generate coverage
