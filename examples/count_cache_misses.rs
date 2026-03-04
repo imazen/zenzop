@@ -1,7 +1,16 @@
 use enough::Unstoppable;
 
+fn codec_corpus_dir() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
+    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    dir
+}
+
 fn main() {
-    let path = "/home/lilith/work/codec-corpus/clic2025-1024/0d154749c7771f58e89ad343653ec4e20d6f037da829f47f5598e5d0a4ab61f0.png";
+    let path = codec_corpus_dir()
+        .join("clic2025-1024/0d154749c7771f58e89ad343653ec4e20d6f037da829f47f5598e5d0a4ab61f0.png");
     let png = std::fs::read(path).unwrap();
     let idat = extract_idat(&png);
     let filtered = decompress_zlib(&idat);
