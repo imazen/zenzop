@@ -37,9 +37,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "archmage"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffeedd6925c1a4a6790e2299d6873e91144eccab42700e58e7f881403c8cab8b"
+checksum = "1e470ca1f169b79284cc3bcdd61da7b16a17efaa1292bc949ab8b54456f90af0"
 dependencies = [
  "archmage-macros",
  "safe_unaligned_simd",
@@ -47,9 +47,9 @@ dependencies = [
 
 [[package]]
 name = "archmage-macros"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a408ca22a6097871cac60710d9b0b7af51edb3a7138ff5508e14ad039e84d26d"
+checksum = "3ab8c78724345a30e13e885591bcca870bc778f47cd2bf9bf01be83e8fe55945"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1052,6 +1052,8 @@ dependencies = [
 [[package]]
 name = "zenflate"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6197d8a257dedba7ffdda35e974adcfaf38be6b455490574888f050df39f5147"
 dependencies = [
  "archmage",
  "enough",
