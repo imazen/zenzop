@@ -38,6 +38,14 @@ proptest = "1.7.0"
 proptest-derive = "0.7.0"
 zopfli = "0.8"
 
+[[example]]
+name = "count_cache_misses"
+required-features = ["std", "zlib"]
+
+[[example]]
+name = "profile_squeeze"
+required-features = ["std", "zlib"]
+
 [[bench]]
 name = "compress"
 harness = false

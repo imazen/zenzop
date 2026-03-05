@@ -46,8 +46,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
         run: cargo test --release
-      - name: Run tests (gzip,zlib only)
-        run: cargo test --release --no-default-features --features gzip,zlib
+      - name: Run tests (gzip,zlib only, no std)
+        run: cargo test --release --no-default-features --features gzip,zlib --lib --tests
       - name: Golden master tests
         shell: bash
         run: cargo build --release && ./test/run.sh
