@@ -351,7 +351,6 @@ fn deflate_part<W: Write>(
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Debug)]
 #[cfg_attr(all(test, feature = "std"), derive(proptest_derive::Arbitrary))]
 #[derive(Default)]
-#[non_exhaustive]
 pub enum BlockType {
     /// Non-compressed blocks (BTYPE=00).
     ///

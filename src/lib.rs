@@ -175,7 +175,6 @@ impl Default for Options {
 /// The output file format to use to store data compressed with Zopfli.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg(feature = "std")]
-#[non_exhaustive]
 pub enum Format {
     /// The gzip file format, as defined in
     /// [RFC 1952](https://datatracker.ietf.org/doc/html/rfc1952).

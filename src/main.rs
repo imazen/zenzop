@@ -25,7 +25,6 @@ fn main() {
         zenzop::Format::Gzip => ".gz",
         zenzop::Format::Zlib => ".zlib",
         zenzop::Format::Deflate => ".deflate",
-        _ => ".bin",
     };
 
     for filename in env::args().skip(1) {
