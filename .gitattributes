@@ -1,0 +1,4 @@
+# Prevent line ending conversion for test data — compressed output
+# must be byte-identical across platforms.
+test/data/** binary
+test/results/** binary
