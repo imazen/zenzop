@@ -38,7 +38,7 @@ fn main() {
         // Attempt to create the output file, panic if the output file could not be opened
         let out_file = File::create(&out_filename)
             .unwrap_or_else(|why| panic!("couldn't create output file {out_filename}: {why}"));
-        let mut out_file = WriteStatistics::new(out_file);
+        let mut out_file = WriteStatistics::new(io::BufWriter::new(out_file));
 
         zenzop::compress(options, output_type, &file, &mut out_file)
             .unwrap_or_else(|why| panic!("couldn't write to output file {out_filename}: {why}"));

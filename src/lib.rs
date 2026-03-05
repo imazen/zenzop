@@ -3,10 +3,10 @@
 
 //! A faster fork of the [Zopfli](https://github.com/google/zopfli) compression library.
 //!
-//! Zopfli is a state of the art DEFLATE compressor that heavily prioritizes compression over speed.
-//! zenzop produces identical output to zopfli but runs 2-3x faster through algorithmic
-//! improvements: eliminating redundant hash chain walks, precomputed cost tables, and a buffered
-//! bit writer.
+//! Zopfli is a DEFLATE compressor that produces near-optimal output at the cost of speed.
+//! zenzop produces identical output to zopfli but runs 1.2–2x faster through algorithmic
+//! improvements: precomputed cost tables, SIMD-accelerated match comparison, and a skip-hash
+//! optimization that eliminates redundant hash chain walks on cached iterations.
 //!
 //! With [`Options::enhanced`] enabled, zenzop applies ECT-derived optimizations — expanded
 //! precode search, multi-strategy Huffman tree selection, and enhanced parser diversification —
@@ -24,11 +24,8 @@
 //!   [`alloc`](https://doc.rust-lang.org/alloc/) (i.e., a memory allocator) is available. In addition,
 //!   the crate exposes minimalist versions of the `std` I/O traits it needs to function, allowing users
 //!   to implement them.
-//! - `nightly`: enables code constructs and features specific to the nightly Rust toolchain. Currently,
-//!   this feature improves rustdoc generation.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(feature = "nightly", feature(doc_cfg))]
 
 // No-op log implementation for no-std targets
 #[cfg(not(feature = "std"))]

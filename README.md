@@ -4,11 +4,11 @@
 [![crates.io](https://img.shields.io/crates/v/zenzop.svg)](https://crates.io/crates/zenzop)
 [![docs.rs](https://docs.rs/zenzop/badge.svg)](https://docs.rs/zenzop)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![MSRV: 1.85](https://img.shields.io/badge/MSRV-1.85-blue.svg)](https://blog.rust-lang.org/)
+[![MSRV: 1.89](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://blog.rust-lang.org/)
 
 A faster fork of the [Zopfli](https://github.com/google/zopfli) DEFLATE compressor, written in Rust.
 
-Zopfli produces the smallest possible DEFLATE output at the cost of speed. zenzop produces byte-identical output 2-3x faster through algorithmic improvements: precomputed lookup tables, arena-free Huffman tree construction, pre-allocated stores, and eliminated bounds checks in hot paths.
+Zopfli produces near-optimal DEFLATE output at the cost of speed. zenzop produces byte-identical output 1.2–2x faster through algorithmic improvements: precomputed cost tables, SIMD-accelerated match comparison, arena-based Huffman tree construction, pre-allocated stores, and a skip-hash optimization that eliminates redundant hash chain walks on cached iterations.
 
 With `enhanced` mode enabled, zenzop applies ECT-derived optimizations — expanded precode search, multi-strategy Huffman tree selection, and enhanced parser diversification — to produce smaller output than standard Zopfli at the cost of byte-for-byte parity with the C reference.
 
@@ -16,7 +16,7 @@ With `enhanced` mode enabled, zenzop applies ECT-derived optimizations — expan
 
 - **Byte-identical output** to C Zopfli (default mode)
 - **Enhanced mode** for smaller-than-Zopfli output (beats ECT-9 at equivalent iterations)
-- **2-3x faster** than the original Rust port
+- **1.2–2x faster** than C Zopfli (input-dependent; larger gains on smaller blocks)
 - **`no_std` + `alloc`** compatible — works on embedded and WASM targets
 - **Cooperative cancellation** via [`enough::Stop`](https://docs.rs/enough) — cancel long-running compressions cleanly
 - **Streaming encoder API** — `DeflateEncoder`, `GzipEncoder`, `ZlibEncoder`
@@ -115,13 +115,12 @@ fn compress_cancellable(data: &[u8], stop: impl zenzop::Stop) -> io::Result<Vec<
 | `zlib` | yes | Zlib format support |
 | `std` | yes | Standard library (logging, `std::io` traits) |
 | `parallel` | no | Parallel block compression via rayon |
-| `nightly` | no | Nightly-only optimizations |
 
 For `no_std` usage: `default-features = false`.
 
 ## MSRV
 
-The minimum supported Rust version is **1.85**. Bumping this is not considered a breaking change.
+The minimum supported Rust version is **1.89**. Bumping this is not considered a breaking change.
 
 ## Building from source
 

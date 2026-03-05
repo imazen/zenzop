@@ -1,6 +1,6 @@
 [package]
 name = "zenzop"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.89"
 description = "A faster fork of the Zopfli DEFLATE compressor with optional ECT-derived optimizations."
@@ -18,10 +18,8 @@ exclude = [
   "test/*",
 ]
 
-# docs.rs uses a nightly toolchain, so it can leverage unstable rustdoc features.
-# Reference: https://docs.rs/about/builds
 [package.metadata.docs.rs]
-cargo-args = ["--all-features"]
+all-features = true
 
 [[bin]]
 name = "zenzop"
@@ -31,7 +29,7 @@ required-features = ["gzip", "std", "zlib"]
 enough = { version = "0.4", default-features = false }
 log = { version = "0.4.28", optional = true }
 rayon = { version = "1.10", optional = true }
-zenflate = { version = "0.2.1", path = "../zenflate", default-features = false, optional = true }
+zenflate = { version = "0.3", path = "../zenflate", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -47,7 +45,6 @@ harness = false
 [features]
 default = ["gzip", "std", "zlib"]
 gzip = ["dep:zenflate"]
-nightly = []
 parallel = ["dep:rayon", "std"]
 std = ["dep:log", "zenflate?/std"]
 zlib = ["dep:zenflate"]

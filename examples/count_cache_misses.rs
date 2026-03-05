@@ -1,13 +1,17 @@
 use enough::Unstoppable;
 
 fn codec_corpus_dir() -> std::path::PathBuf {
-    let dir = std::path::PathBuf::from(
-        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| {
-            let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-            parent.join("codec-corpus").to_string_lossy().into_owned()
-        }),
+    let dir = std::path::PathBuf::from(std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| {
+        let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        parent.join("codec-corpus").to_string_lossy().into_owned()
+    }));
+    assert!(
+        dir.is_dir(),
+        "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.",
+        dir.display()
     );
-    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
     dir
 }
 

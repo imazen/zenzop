@@ -188,7 +188,6 @@ impl From<enough::StopReason> for Error {
     }
 }
 
-#[cfg(feature = "nightly")]
 impl core::error::Error for Error {}
 
 /// A list specifying general categories of I/O error.
