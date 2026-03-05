@@ -28,7 +28,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zenzop = "0.3"
+zenzop = "0.4"
 ```
 
 ### Compress data
