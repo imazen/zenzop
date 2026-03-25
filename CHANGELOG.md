@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.1 (unreleased)
+## 0.4.1 (2026-03-25)
 
 ### Changed
 - Bumped `enough` 0.4 → 0.4.2
