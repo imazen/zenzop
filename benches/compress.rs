@@ -1,4 +1,5 @@
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use zenbench::criterion_compat::*;
+use zenbench::{criterion_group, criterion_main};
 
 fn bench_compress(c: &mut Criterion) {
     let text = std::fs::read("test/data/calgary-books.txt").expect("test data missing");
