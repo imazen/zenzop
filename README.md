@@ -141,6 +141,15 @@ cargo test                    # Unit tests + property-based tests
 
 Apache-2.0
 
+
+
+### Upstream Contribution
+
+This is a fork of [google/zopfli](https://github.com/google/zopfli) (Apache-2.0).
+We are willing to release our improvements under the original Apache-2.0
+license if upstream takes over maintenance of those improvements. We'd rather
+contribute back than maintain a parallel codebase. Open an issue or reach out.
+
 ## Origin
 
 Forked from [zopfli-rs/zopfli](https://github.com/zopfli-rs/zopfli), which was Carol Nichols' Rust reimplementation of Google's Zopfli. Enhanced mode optimizations derived from [ECT](https://github.com/fhanau/Efficient-Compression-Tool) (Efficient Compression Tool).
