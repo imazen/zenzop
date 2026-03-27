@@ -32,7 +32,7 @@ rayon = { version = "1.10", optional = true }
 zenflate = { version = "0.3.0", default-features = false, optional = true }
 
 [dev-dependencies]
-zenbench = { version = "0.1.1", features = ["criterion-compat"] }
+zenbench = { version = "0.1.2", features = ["criterion-compat"] }
 miniz_oxide = "0.9.1"
 proptest = "1.7.0"
 proptest-derive = "0.8.0"
