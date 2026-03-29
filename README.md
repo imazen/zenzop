@@ -1,10 +1,4 @@
-# zenzop
-
-[![CI](https://github.com/imazen/zenzop/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/zenzop/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/zenzop.svg)](https://crates.io/crates/zenzop)
-[![docs.rs](https://docs.rs/zenzop/badge.svg)](https://docs.rs/zenzop)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![MSRV: 1.89](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://blog.rust-lang.org/)
+# zenzop [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenzop/ci.yml?style=flat-square)](https://github.com/imazen/zenzop/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/zenzop?style=flat-square)](https://crates.io/crates/zenzop) [![lib.rs](https://img.shields.io/crates/v/zenzop?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/zenzop) [![docs.rs](https://img.shields.io/docsrs/zenzop?style=flat-square)](https://docs.rs/zenzop) [![license](https://img.shields.io/crates/l/zenzop?style=flat-square)](https://github.com/imazen/zenzop#license)
 
 A faster fork of the [Zopfli](https://github.com/google/zopfli) DEFLATE compressor, written in Rust.
 
@@ -137,11 +131,84 @@ cargo test                    # Unit tests + property-based tests
 ./test/run.sh                 # Golden master: byte-identical to C Zopfli
 ```
 
+## Image tech I maintain
+
+| | |
+|:--|:--|
+| State of the art codecs<sup>[1]</sup> | [zenjpeg] · [zenpng] · [zenwebp] · [zengif] · [zenavif] ([rav1d-safe] · [zenrav1e] · [zenavif-parse] · [zenavif-serialize]) · [zenjxl] ([jxl-encoder] · [zenjxl-decoder]) · [zentiff] · [zenbitmaps] · [heic] · [zenraw] · [zenpdf] · [ultrahdr] · [mozjpeg-rs] · [webpx] |
+| Compression | [zenflate] · **zenzop** |
+| Processing | [zenresize] · [zenfilters] · [zenquant] · [zenblend] |
+| Metrics | [zensim] · [fast-ssim2] · [butteraugli] · [resamplescope-rs] · [codec-eval] · [codec-corpus] |
+| Pixel types & color | [zenpixels] · [zenpixels-convert] · [linear-srgb] · [garb] |
+| Pipeline | [zenpipe] · [zencodec] · [zencodecs] · [zenlayout] · [zennode] |
+| ImageResizer | [ImageResizer] (C#) — 24M+ NuGet downloads across all packages |
+| [Imageflow][] | Image optimization engine (Rust) — [.NET][imageflow-dotnet] · [node][imageflow-node] · [go][imageflow-go] — 9M+ NuGet downloads across all packages |
+| [Imageflow Server][] | [The fast, safe image server](https://www.imazen.io/) (Rust+C#) — 552K+ NuGet downloads, deployed by Fortune 500s and major brands |
+
+<sup>[1]</sup> <sub>as of 2026</sub>
+
+### General Rust awesomeness
+
+[archmage] · [magetypes] · [enough] · [whereat] · [zenbench] · [cargo-copter]
+
+[And other projects](https://www.imazen.io/open-source) · [GitHub @imazen](https://github.com/imazen) · [GitHub @lilith](https://github.com/lilith) · [lib.rs/~lilith](https://lib.rs/~lilith) · [NuGet](https://www.nuget.org/profiles/imazen) (over 30 million downloads / 87 packages)
+
+[zenjpeg]: https://crates.io/crates/zenjpeg
+[zenpng]: https://crates.io/crates/zenpng
+[zenwebp]: https://crates.io/crates/zenwebp
+[zengif]: https://crates.io/crates/zengif
+[zenavif]: https://crates.io/crates/zenavif
+[rav1d-safe]: https://crates.io/crates/rav1d-safe
+[zenrav1e]: https://crates.io/crates/zenrav1e
+[zenavif-parse]: https://crates.io/crates/zenavif-parse
+[zenavif-serialize]: https://crates.io/crates/zenavif-serialize
+[zenjxl]: https://crates.io/crates/zenjxl
+[jxl-encoder]: https://crates.io/crates/jxl-encoder
+[zenjxl-decoder]: https://crates.io/crates/zenjxl-decoder
+[zentiff]: https://crates.io/crates/zentiff
+[zenbitmaps]: https://crates.io/crates/zenbitmaps
+[heic]: https://crates.io/crates/heic
+[zenraw]: https://crates.io/crates/zenraw
+[zenpdf]: https://crates.io/crates/zenpdf
+[ultrahdr]: https://crates.io/crates/ultrahdr
+[mozjpeg-rs]: https://crates.io/crates/mozjpeg-rs
+[webpx]: https://crates.io/crates/webpx
+[zenflate]: https://crates.io/crates/zenflate
+[zenresize]: https://crates.io/crates/zenresize
+[zenfilters]: https://crates.io/crates/zenfilters
+[zenquant]: https://crates.io/crates/zenquant
+[zenblend]: https://crates.io/crates/zenblend
+[zensim]: https://crates.io/crates/zensim
+[fast-ssim2]: https://crates.io/crates/fast-ssim2
+[butteraugli]: https://crates.io/crates/butteraugli
+[resamplescope-rs]: https://crates.io/crates/resamplescope-rs
+[codec-eval]: https://crates.io/crates/codec-eval
+[codec-corpus]: https://crates.io/crates/codec-corpus
+[zenpixels]: https://crates.io/crates/zenpixels
+[zenpixels-convert]: https://crates.io/crates/zenpixels-convert
+[linear-srgb]: https://crates.io/crates/linear-srgb
+[garb]: https://crates.io/crates/garb
+[zenpipe]: https://crates.io/crates/zenpipe
+[zencodec]: https://crates.io/crates/zencodec
+[zencodecs]: https://crates.io/crates/zencodecs
+[zenlayout]: https://crates.io/crates/zenlayout
+[zennode]: https://crates.io/crates/zennode
+[ImageResizer]: https://imageresizing.net
+[Imageflow]: https://github.com/imazen/imageflow
+[imageflow-dotnet]: https://www.nuget.org/packages/Imageflow.AllPlatforms
+[imageflow-node]: https://www.npmjs.com/package/@imazen/imageflow-node
+[imageflow-go]: https://github.com/imazen/imageflow-go
+[Imageflow Server]: https://github.com/imazen/imageflow-dotnet-server
+[archmage]: https://crates.io/crates/archmage
+[magetypes]: https://crates.io/crates/magetypes
+[enough]: https://crates.io/crates/enough
+[whereat]: https://crates.io/crates/whereat
+[zenbench]: https://crates.io/crates/zenbench
+[cargo-copter]: https://crates.io/crates/cargo-copter
+
 ## License
 
 Apache-2.0
-
-
 
 ### Upstream Contribution
 
