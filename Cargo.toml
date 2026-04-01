@@ -29,7 +29,7 @@ required-features = ["gzip", "std", "zlib"]
 enough = { version = "0.4.3", default-features = false }
 log = { version = "0.4.28", optional = true }
 rayon = { version = "1.10", optional = true }
-zenflate = { version = "0.3", default-features = false, optional = true }
+zenflate = { version = "0.3.4", default-features = false, optional = true }
 
 [dev-dependencies]
 zenbench = { version = "0.1.2", features = ["criterion-compat"] }
