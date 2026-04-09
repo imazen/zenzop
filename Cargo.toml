@@ -16,6 +16,17 @@ exclude = [
   "benchmark-builds/*",
   "rustfmt.toml",
   "test/*",
+  "CLAUDE.md",
+  "CONTEXT-HANDOFF.md",
+  "FEEDBACK.md",
+  ".claude/",
+  ".superwork/",
+  ".zenbench/",
+  "copter-report/",
+  "Cross.toml",
+  "justfile",
+  "Cargo.toml.original.txt",
+  "fuzz/",
 ]
 
 [package.metadata.docs.rs]
