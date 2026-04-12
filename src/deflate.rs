@@ -887,8 +887,7 @@ fn calculate_tree_size_with_scratch(
     }
 }
 
-/// Encodes the Huffman tree and returns how many bits its encoding takes and returns output.
-// TODO: This return value is unused.
+/// Encodes the Huffman tree to the bitwise writer.
 #[allow(clippy::too_many_arguments)]
 fn encode_tree<W: Write>(
     ll_lengths: &[u32],
@@ -899,7 +898,7 @@ fn encode_tree<W: Write>(
     fuse_7: bool,
     fuse_8: bool,
     bitwise_writer: &mut BitwiseWriter<W>,
-) -> Result<usize, Error> {
+) -> Result<(), Error> {
     let mut hlit = 29; /* 286 - 257 */
     let mut hdist = 29; /* 32 - 1, but gzip does not like hdist > 29.*/
 
@@ -908,8 +907,6 @@ fn encode_tree<W: Write>(
     let order = [
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
     ];
-    let mut result_size = 0;
-
     let mut rle = vec![];
     let mut rle_bits = vec![];
 
@@ -1054,17 +1051,7 @@ fn encode_tree<W: Write>(
         }
     }
 
-    result_size += 14; /* hlit, hdist, hclen bits */
-    result_size += (hclen + 4) * 3; /* clcl bits */
-    for i in 0..19 {
-        result_size += clcl[i] as usize * clcounts[i];
-    }
-    /* Extra bits. */
-    result_size += clcounts[16] * 2;
-    result_size += clcounts[17] * 3;
-    result_size += clcounts[18] * 7;
-
-    Ok(result_size)
+    Ok(())
 }
 
 fn add_dynamic_tree<W: Write>(
@@ -1116,7 +1103,6 @@ fn add_dynamic_tree<W: Write>(
         best_fuse_8,
         bitwise_writer,
     )
-    .map(|_| ())
 }
 
 /// Adds a deflate block with the given LZ77 data to the output.
