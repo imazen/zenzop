@@ -98,6 +98,21 @@ fn stop_to_error(_reason: StopReason) -> Error {
     io::ErrorKind::Cancelled.into()
 }
 
+/// Maximum number of squeeze iterations the encoder will actually run, regardless of
+/// what [`Options::iteration_count`] or [`Options::iterations_without_improvement`] is
+/// set to.
+///
+/// Each squeeze iteration runs a full DP pass over the block, so wall-clock cost grows
+/// linearly with iteration count and the marginal compression gain is well past
+/// negligible by the low hundreds. Real-world good values are 5–15 (single-digit ms to
+/// seconds per MiB depending on input); anything beyond ~1000 is pathological and only
+/// burns CPU. Capping internally avoids a compute-DoS footgun for callers that surface
+/// `Options` to untrusted config (e.g., a server endpoint that takes
+/// `iteration_count` as a query parameter).
+///
+/// Callers that want a higher cap can call [`Options::with_iteration_cap`].
+pub const DEFAULT_MAX_ITERATIONS: u64 = 1000;
+
 /// Options for the Zopfli compression algorithm.
 ///
 /// # Examples
@@ -123,6 +138,12 @@ pub struct Options {
     /// Good values: 10, 15 for small files, 5 for files over several MB in size or
     /// it will be too slow.
     ///
+    /// **The encoder internally clamps the effective iteration count to
+    /// [`Options::iteration_cap`] (default [`DEFAULT_MAX_ITERATIONS`] = 1000) to prevent
+    /// pathological compute-DoS configurations (e.g. `u64::MAX`).** Use
+    /// [`Options::with_iteration_cap`] to raise the cap if you genuinely need more
+    /// iterations.
+    ///
     /// Default value: 15.
     #[cfg_attr(
         all(test, feature = "std"),
@@ -134,7 +155,11 @@ pub struct Options {
     /// Stop after rerunning forward and backward pass this many times without finding
     /// a smaller representation of the block.
     ///
-    /// Default value: practically infinite (maximum `u64` value)
+    /// **Also clamped internally by [`Options::iteration_cap`].** With
+    /// `iterations_without_improvement = u64::MAX` and no [`Stop`] wired up, the encoder
+    /// would otherwise loop until heat death; the cap turns that into a finite worst case.
+    ///
+    /// Default value: practically infinite (maximum `u64` value), clamped at runtime.
     pub iterations_without_improvement: NonZeroU64,
     /// Maximum amount of blocks to split into (0 for unlimited, but this can give
     /// extreme results that hurt compression on some files).
@@ -158,6 +183,51 @@ pub struct Options {
     ///
     /// Default value: `false`.
     pub enhanced: bool,
+    /// Internal cap on the effective iteration count.
+    ///
+    /// Both [`Options::iteration_count`] and [`Options::iterations_without_improvement`]
+    /// are silently clamped to this value before each block is encoded. This prevents
+    /// compute-DoS from a `u64::MAX`-style configuration while leaving real-world good
+    /// values (5–15) untouched.
+    ///
+    /// Use [`Options::with_iteration_cap`] to raise this if you genuinely need more
+    /// iterations than the default. Setting this lower than `iteration_count` will
+    /// effectively reduce iteration count for that encode.
+    ///
+    /// Default value: [`DEFAULT_MAX_ITERATIONS`] (1000).
+    #[cfg_attr(
+        all(test, feature = "std"),
+        proptest(
+            strategy = "(1..=DEFAULT_MAX_ITERATIONS).prop_map(|n| NonZeroU64::new(n).unwrap())"
+        )
+    )]
+    pub iteration_cap: NonZeroU64,
+}
+
+impl Options {
+    /// Set the internal cap on effective iteration count.
+    ///
+    /// See [`Options::iteration_cap`] for what this controls.
+    pub fn with_iteration_cap(mut self, cap: NonZeroU64) -> Self {
+        self.iteration_cap = cap;
+        self
+    }
+
+    /// The clamped iteration count actually used by the encoder.
+    ///
+    /// Equal to `min(iteration_count, iteration_cap)`.
+    pub fn effective_iteration_count(&self) -> u64 {
+        self.iteration_count.get().min(self.iteration_cap.get())
+    }
+
+    /// The clamped "iterations without improvement" budget actually used by the encoder.
+    ///
+    /// Equal to `min(iterations_without_improvement, iteration_cap)`.
+    pub fn effective_iterations_without_improvement(&self) -> u64 {
+        self.iterations_without_improvement
+            .get()
+            .min(self.iteration_cap.get())
+    }
 }
 
 impl Default for Options {
@@ -168,6 +238,7 @@ impl Default for Options {
             maximum_block_splits: 15,
             block_type: BlockType::Dynamic,
             enhanced: false,
+            iteration_cap: NonZeroU64::new(DEFAULT_MAX_ITERATIONS).unwrap(),
         }
     }
 }
@@ -433,5 +504,81 @@ mod test {
                 inflate::decompress_to_vec(&enhanced).expect("Enhanced output must decompress");
             assert_eq!(data, &decompressed[..]);
         }
+    }
+
+    /// Default options must clamp at `DEFAULT_MAX_ITERATIONS`.
+    #[test]
+    fn iteration_cap_default_value() {
+        let opts = Options::default();
+        assert_eq!(opts.iteration_cap.get(), DEFAULT_MAX_ITERATIONS);
+    }
+
+    /// `effective_iteration_count` must clamp pathological values.
+    #[test]
+    fn iteration_cap_clamps_huge_count() {
+        let opts = Options {
+            iteration_count: core::num::NonZeroU64::new(u64::MAX).unwrap(),
+            ..Options::default()
+        };
+        assert_eq!(opts.effective_iteration_count(), DEFAULT_MAX_ITERATIONS);
+    }
+
+    /// `effective_iteration_count` must NOT clamp normal values.
+    #[test]
+    fn iteration_cap_passes_normal_count() {
+        let opts = Options {
+            iteration_count: core::num::NonZeroU64::new(15).unwrap(),
+            ..Options::default()
+        };
+        assert_eq!(opts.effective_iteration_count(), 15);
+    }
+
+    /// Default `iterations_without_improvement = u64::MAX` must clamp.
+    #[test]
+    fn iteration_cap_clamps_default_no_improvement() {
+        let opts = Options::default();
+        assert_eq!(
+            opts.effective_iterations_without_improvement(),
+            DEFAULT_MAX_ITERATIONS
+        );
+    }
+
+    /// `with_iteration_cap` must allow raising the cap.
+    #[test]
+    fn iteration_cap_can_be_raised() {
+        let raised = NonZeroU64::new(50_000).unwrap();
+        let opts = Options::default().with_iteration_cap(raised);
+        assert_eq!(opts.iteration_cap, raised);
+        // Now `iterations_without_improvement = u64::MAX` still gets clamped, but to the
+        // new cap, not the old default.
+        assert_eq!(
+            opts.effective_iterations_without_improvement(),
+            raised.get()
+        );
+    }
+
+    /// End-to-end: compressing with `iteration_count = u64::MAX` must terminate quickly
+    /// and produce valid DEFLATE output. Without the cap this would loop until heat death.
+    #[test]
+    fn iteration_cap_enables_pathological_options_to_terminate() {
+        let data = b"The quick brown fox jumps over the lazy dog. \
+                     The quick brown fox jumps over the lazy dog. \
+                     The quick brown fox jumps over the lazy dog.";
+        let mut compressed = Vec::new();
+        let options = Options {
+            iteration_count: NonZeroU64::new(u64::MAX).unwrap(),
+            iterations_without_improvement: NonZeroU64::new(u64::MAX).unwrap(),
+            // Lower the cap to keep this test fast — proves the cap path actually
+            // takes effect rather than just relying on the 1000 default.
+            iteration_cap: NonZeroU64::new(2).unwrap(),
+            ..Options::default()
+        };
+        let mut encoder = DeflateEncoder::new(options, &mut compressed);
+        io::copy(&mut &data[..], &mut encoder).unwrap();
+        encoder.finish().unwrap();
+
+        let decompressed = inflate::decompress_to_vec(&compressed)
+            .expect("Output of capped pathological options must be valid DEFLATE");
+        assert_eq!(&data[..], &decompressed[..]);
     }
 }

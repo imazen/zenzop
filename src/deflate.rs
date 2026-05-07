@@ -1751,8 +1751,8 @@ fn blocksplit_attempt<W: Write>(
                     in_data,
                     start,
                     end,
-                    options.iteration_count.get(),
-                    options.iterations_without_improvement.get(),
+                    options.effective_iteration_count(),
+                    options.effective_iterations_without_improvement(),
                     options.enhanced,
                     stop,
                 )
@@ -1788,8 +1788,8 @@ fn blocksplit_attempt<W: Write>(
                 in_data,
                 start,
                 end,
-                options.iteration_count.get(),
-                options.iterations_without_improvement.get(),
+                options.effective_iteration_count(),
+                options.effective_iterations_without_improvement(),
                 options.enhanced,
                 stop,
             )
