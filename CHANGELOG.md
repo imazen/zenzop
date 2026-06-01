@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Internal
+- Excluded `.cargo/`, `.gitattributes`, `.rustfmt.toml`, and `benches/` from the published crate tarball (packaging hygiene).
+
 ### Added
 - `Options::iteration_cap` field, `Options::with_iteration_cap`,
   `Options::effective_iteration_count`, `Options::effective_iterations_without_improvement`,

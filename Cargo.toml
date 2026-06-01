@@ -10,23 +10,27 @@ license = "Apache-2.0"
 keywords = ["compression", "deflate", "zopfli"]
 categories = ["compression", "no-std"]
 exclude = [
-  ".github/*",
+  ".cargo/",
+  ".gitattributes",
   ".gitignore",
-  "Makefile",
-  "benchmark-builds/*",
-  "rustfmt.toml",
-  "test/*",
-  "CLAUDE.md",
-  "CONTEXT-HANDOFF.md",
-  "FEEDBACK.md",
+  ".github/*",
+  ".rustfmt.toml",
   ".claude/",
   ".superwork/",
   ".zenbench/",
+  "benches/",
+  "benchmark-builds/*",
+  "Cargo.toml.original.txt",
+  "CLAUDE.md",
+  "CONTEXT-HANDOFF.md",
   "copter-report/",
   "Cross.toml",
-  "justfile",
-  "Cargo.toml.original.txt",
+  "FEEDBACK.md",
   "fuzz/",
+  "justfile",
+  "Makefile",
+  "rustfmt.toml",
+  "test/*",
 ]
 
 [package.metadata.docs.rs]
