@@ -25,12 +25,14 @@ exclude = [
   "CONTEXT-HANDOFF.md",
   "copter-report/",
   "Cross.toml",
+  "docs/",
   "FEEDBACK.md",
   "fuzz/",
   "justfile",
   "Makefile",
   "rustfmt.toml",
   "test/*",
+  "tests/public_api_doc.rs",
 ]
 
 [package.metadata.docs.rs]
@@ -51,6 +53,7 @@ zenbench = { version = "0.1.2", features = ["criterion-compat"] }
 miniz_oxide = "0.9.1"
 proptest = "1.7.0"
 proptest-derive = "0.8.0"
+serde_json = "1.0.150"
 zopfli = "0.8"
 
 [[example]]

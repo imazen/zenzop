@@ -15,9 +15,18 @@ bench:
 lint:
     cargo clippy --all-targets
 
-# Format code
+# Format code + regenerate the public-API surface snapshot (docs/public-api/)
 fmt:
     cargo fmt
+    cargo test -p zenzop --test public_api_doc
+
+# Regenerate the public-API surface snapshot only
+api-doc:
+    cargo test -p zenzop --test public_api_doc
+
+# Verify the committed snapshot is current (what CI runs)
+api-doc-check:
+    ZEN_API_DOC=check cargo test -p zenzop --test public_api_doc
 
 # Check formatting
 fmt-check:
