@@ -337,4 +337,9 @@ Cargo.toml.original.txt
 *.profraw
 *.profdata
 fuzz-*.log
+
+# The apidoc snapshot-runner's lockfile IS committed (negation must come
+# after the global Cargo.lock ignore — last matching pattern wins). Its
+# target/ is already covered by the unanchored `target/` above.
+!apidoc/Cargo.lock
 .workongoing

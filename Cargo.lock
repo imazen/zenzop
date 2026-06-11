@@ -1141,7 +1141,6 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "rayon",
- "serde_json",
  "zenbench",
  "zenflate",
  "zopfli",

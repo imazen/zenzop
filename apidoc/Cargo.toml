@@ -1,0 +1,17 @@
+# CI-free public-API snapshot runner — the only package depending on
+# zenutils-apidoc. Plain `cargo test` and every CI job (including
+# --all-features ones) never compile the apidoc tree or run rustdoc.
+# Regenerate via `just api-doc`.
+[package]
+name = "zenzop-apidoc"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+zenutils-apidoc = "0.1.0"
+
+# Standalone workspace root. The parent manifest is a single-package root
+# with no [workspace] table (so no `exclude` entry exists up there); this
+# empty table is what keeps cargo from attaching this runner to it.
+[workspace]

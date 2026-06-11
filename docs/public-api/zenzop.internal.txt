@@ -1,0 +1,30 @@
+# zenzop public API — doc(hidden) items and excluded-feature surface
+# excluded features: (none)
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+
+## summary
+#
+#   inherent methods                            4
+#   trait roster entries (type × trait)         4
+#
+# per-module pub lines:
+#   (root)                            4
+
+## items (4 lines)
+
+pub fn BlockType::assert_fields_are_eq(&self)
+pub fn ErrorKind::assert_fields_are_eq(&self)
+pub fn Format::assert_fields_are_eq(&self)
+pub fn Options::assert_fields_are_eq(&self)
+
+## trait impls (4 types)
+
+BlockType: TrivialClone
+ErrorKind: TrivialClone
+Format: TrivialClone
+Options: TrivialClone
