@@ -171,7 +171,12 @@ pub fn blocksplit_lz77(lz77: &Lz77Store, maxblocks: u16, splitpoints: &mut Vec<u
     // RefCell allows the Fn closure to borrow scratch mutably.
     let scratch = RefCell::new(HuffmanScratch::new());
 
-    while maxblocks != 0 && numblocks < u32::from(maxblocks) {
+    // `maxblocks == 0` means "no limit" (matches upstream Zopfli and the
+    // documented contract): keep splitting until `find_largest_splittable_block`
+    // reports no further beneficial split. The inner `is_finished` break below
+    // guarantees termination. (Previously `maxblocks != 0 &&` inverted this so
+    // `0` produced *no* splitting; non-zero `maxblocks` is unaffected.)
+    while maxblocks == 0 || numblocks < u32::from(maxblocks) {
         debug_assert!(lstart < lend);
         let find_minimum_result = find_minimum(
             |i| estimate_cost(lz77, lstart, i, &scratch) + estimate_cost(lz77, i, lend, &scratch),
@@ -259,4 +264,36 @@ pub fn blocksplit(
         }
     }
     debug_assert_eq!(splitpoints.len(), nlz77points);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blocksplit;
+    use alloc::vec::Vec;
+
+    /// `maxblocks == 0` must mean "no limit" (upstream Zopfli semantics):
+    /// keep splitting until natural termination — NOT "produce no splits".
+    #[test]
+    fn maxblocks_zero_is_unlimited_not_no_split() {
+        // Four distinct ~4 KiB regions so the splitter finds split points.
+        let mut data = Vec::with_capacity(16 * 1024);
+        data.extend(core::iter::repeat(b'A').take(4096));
+        data.extend((0..4096u32).map(|i| i.wrapping_mul(2_654_435_761) as u8));
+        data.extend(core::iter::repeat(b'Z').take(4096));
+        data.extend((0..4096u32).map(|i| (i % 5) as u8));
+
+        let mut sp_zero = Vec::new();
+        blocksplit(&data, 0, data.len(), 0, &mut sp_zero);
+        let mut sp_big = Vec::new();
+        blocksplit(&data, 0, data.len(), u16::MAX, &mut sp_big);
+        let mut sp_one = Vec::new();
+        blocksplit(&data, 0, data.len(), 1, &mut sp_one);
+
+        // `0` == unlimited: identical to an effectively-unbounded cap.
+        assert_eq!(sp_zero, sp_big, "maxblocks=0 must equal unlimited (u16::MAX)");
+        // ...and it actually splits (the old `!= 0 &&` made `0` produce none).
+        assert!(!sp_zero.is_empty(), "varied data should produce split points");
+        // `maxblocks=1` caps at a single block (no split points).
+        assert!(sp_one.is_empty(), "maxblocks=1 means one block (no splits)");
+    }
 }
