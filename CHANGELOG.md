@@ -22,6 +22,12 @@
 - Compute-DoS footgun: previously, an `Options` with `iteration_count = u64::MAX` (or
   `iterations_without_improvement = u64::MAX`, the default) and the default unstoppable
   `Stop` would loop until heat death. The internal cap turns that into a finite worst case.
+- docs(readme): document the `Options` iteration knob (`iteration_count`) so the advertised
+  max compression ("at 60 iterations it beats ECT-9") is actually reachable, plus the full
+  `Options` field table, `Format` variants, the `ZENZOP_ITERATIONS`/`ZENZOP_ENHANCED` CLI
+  env vars, and a note that zenzop is compress-only (decode the gzip/zlib/DEFLATE output
+  with any standard decoder). Found by an insulated external-developer usability test, which
+  could not find any way to set the iteration count from the README alone.
 
 ## 0.4.1 (2026-03-25)
 

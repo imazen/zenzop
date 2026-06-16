@@ -6,6 +6,8 @@ Zopfli produces near-optimal DEFLATE output at the cost of speed. zenzop produce
 
 With `enhanced` mode enabled, zenzop applies ECT-derived optimizations — expanded precode search, multi-strategy Huffman tree selection, and enhanced parser diversification — to produce smaller output than standard Zopfli at the cost of byte-for-byte parity with the C reference.
 
+**zenzop is compress-only.** Like Zopfli itself, it has no decompressor — the output is standard gzip/zlib/raw DEFLATE and decodes with any conforming decoder (e.g. [`flate2`](https://crates.io/crates/flate2), [`miniz_oxide`](https://crates.io/crates/miniz_oxide), or [zenflate](https://crates.io/crates/zenflate)'s decode side).
+
 ## Features
 
 - **Byte-identical output** to C Zopfli (default mode)
@@ -63,7 +65,63 @@ fn main() -> io::Result<()> {
 }
 ```
 
-Enhanced mode produces smaller DEFLATE output than standard Zopfli with ~5% runtime overhead. At 60 iterations it beats ECT-9 on representative test data.
+Enhanced mode produces smaller DEFLATE output than standard Zopfli with ~5% runtime overhead.
+
+### Maximum compression (tuning the iteration count)
+
+Like Zopfli, zenzop trades CPU time for ratio by re-running its forward/backward LZ77 optimization pass multiple times. The knob is **`Options::iteration_count`** — more iterations means smaller output and more time. The default is 15; the README's claim that **enhanced mode beats ECT-9 holds at 60 iterations** on representative test data, and to reach that you must raise `iteration_count` yourself:
+
+```rust
+use std::io;
+use std::num::NonZeroU64;
+
+fn main() -> io::Result<()> {
+    let data = b"Hello, world!";
+    let mut output = Vec::new();
+
+    // `Options` is `#[non_exhaustive]`, so build from `default()` and set fields.
+    let mut options = zenzop::Options::default();
+    options.enhanced = true;
+    options.iteration_count = NonZeroU64::new(60).unwrap();
+
+    zenzop::compress(options, zenzop::Format::Gzip, &data[..], &mut output)?;
+
+    Ok(())
+}
+```
+
+The effective iteration count is internally clamped to `Options::iteration_cap` (default `DEFAULT_MAX_ITERATIONS` = 1000) to avoid a compute-DoS footgun when `Options` is fed from untrusted config; 60 is well under the cap. If you genuinely need more than 1000 iterations, raise the cap with [`Options::with_iteration_cap`](https://docs.rs/zenzop/latest/zenzop/struct.Options.html#method.with_iteration_cap).
+
+#### `Options` fields
+
+| Field | Type | Default | Effect |
+|-------|------|---------|--------|
+| `iteration_count` | `NonZeroU64` | `15` | Total LZ77 optimization passes. Higher = smaller output, slower. Set to `60` for the ECT-9-beating result. |
+| `enhanced` | `bool` | `false` | Enable ECT-derived optimizations (smaller output, ~5% slower, drops byte-for-byte parity with C Zopfli). |
+| `iterations_without_improvement` | `NonZeroU64` | `u64::MAX` | Early-stop budget: bail after this many consecutive passes with no size improvement. Defaults to "never give up early". |
+| `maximum_block_splits` | `u16` | `15` | Max block splits (`0` = unlimited). |
+| `block_type` | `BlockType` | `BlockType::Dynamic` | DEFLATE block type; `Dynamic` auto-selects the smallest. |
+| `iteration_cap` | `NonZeroU64` | `1000` | Internal clamp applied to both iteration fields. Raise via `Options::with_iteration_cap`. |
+
+`Options` is `#[non_exhaustive]`, so external code must build it from `Options::default()` and assign the fields it wants to change (as above) — a struct literal won't compile outside this crate.
+
+### Output formats
+
+`Format` selects the container for the compressed stream — all readable by standard decoders:
+
+| Variant | Format | Feature |
+|---------|--------|---------|
+| `Format::Gzip` | gzip ([RFC 1952](https://datatracker.ietf.org/doc/html/rfc1952)) | `gzip` (default) |
+| `Format::Zlib` | zlib ([RFC 1950](https://datatracker.ietf.org/doc/html/rfc1950)) | `zlib` (default) |
+| `Format::Deflate` | raw DEFLATE ([RFC 1951](https://datatracker.ietf.org/doc/html/rfc1951)) | always available |
+
+### CLI
+
+The bundled `zenzop` binary reads two environment variables: `ZENZOP_ITERATIONS` (sets `iteration_count`, default 15) and `ZENZOP_ENHANCED` (any value enables enhanced mode). It always writes gzip (`.gz`):
+
+```sh
+ZENZOP_ENHANCED=1 ZENZOP_ITERATIONS=60 zenzop input.bin   # → input.bin.gz
+```
 
 ### Streaming encoder
 
