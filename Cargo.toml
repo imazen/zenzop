@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.89"
 description = "A faster fork of the Zopfli DEFLATE compressor with optional ECT-derived optimizations."
 repository = "https://github.com/imazen/zenzop"
-readme = "README.md"
+readme = "README.crates.md"
 license = "Apache-2.0"
 keywords = ["compression", "deflate", "zopfli"]
 categories = ["compression", "no-std"]
@@ -19,6 +19,7 @@ exclude = [
   ".superwork/",
   ".zenbench/",
   "benches/",
+  "benchmarks/",
   "benchmark-builds/*",
   "Cargo.toml.original.txt",
   "CLAUDE.md",

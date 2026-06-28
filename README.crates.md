@@ -1,4 +1,6 @@
-# zenzop [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenzop/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenzop/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/zenzop?style=flat-square)](https://crates.io/crates/zenzop) [![lib.rs](https://img.shields.io/crates/v/zenzop?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/zenzop) [![docs.rs](https://img.shields.io/docsrs/zenzop?style=flat-square)](https://docs.rs/zenzop) [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/crates/l/zenzop?style=flat-square)](#license)
+<!-- GENERATED FROM README.md by zenutils gen-readme-crates.sh — DO NOT EDIT. -->
+
+# zenzop [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenzop/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenzop/actions/workflows/ci.yml)
 
 A faster fork of the [Zopfli](https://github.com/google/zopfli) DEFLATE compressor, written in Rust. Pure Rust, `#![forbid(unsafe_code)]`, `no_std` + `alloc` compatible.
 
@@ -148,26 +150,6 @@ For `no_std` usage: `default-features = false`. The crate then falls back to a m
 
 The minimum supported Rust version is **1.89**. Bumping this is not considered a breaking change.
 
-<!-- crates.io:skip-start -->
-## Benchmarks
-
-`benches/compress.rs` measures zenzop against the [`zopfli`](https://crates.io/crates/zopfli) crate (the upstream this fork descends from) on three representative inputs — text, JavaScript, and a PNG — all at `Format::Gzip` with `Options::default()`. Input bytes are loaded into memory once, *outside* the timed region, so the measurement is pure compression throughput. Run it yourself:
-
-```sh
-git clone https://github.com/imazen/zenzop && cd zenzop
-cargo bench --bench compress       # build WITHOUT -C target-cpu=native
-```
-
-Full protocol, threading mode, competitor pinning, and how to reproduce a size-vs-time tradeoff curve live in [`benchmarks/README.md`](https://github.com/imazen/zenzop/blob/main/benchmarks/README.md). We don't ship pre-baked numbers — the ratio is workload- and hardware-dependent, so the harness is the source of truth.
-
-## Development
-
-```sh
-cargo build --release          # binary at target/release/zenzop
-cargo test                     # unit + property-based tests
-./test/run.sh                  # golden master: byte-identical to C Zopfli
-```
-<!-- crates.io:skip-end -->
 
 ## License
 

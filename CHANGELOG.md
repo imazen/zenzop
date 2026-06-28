@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+- README overhaul: standardized zen* badge row (CI label + MSRV badge), `## Quick start`,
+  and a reproducible benchmarks section. Split the crates.io README into a generated
+  `README.crates.md` (`readme` now points to it). Dropped the unverified "beats ECT-9"
+  comparison — no committed benchmark backs it — keeping the verified "smaller than standard
+  Zopfli" framing and respectful Zopfli/ECT credit. Added `benchmarks/README.md` documenting
+  the `cargo bench --bench compress` protocol and repro (excluded from the published tarball).
+
 ### Internal
 - Excluded `.cargo/`, `.gitattributes`, `.rustfmt.toml`, and `benches/` from the published crate tarball (packaging hygiene).
 
