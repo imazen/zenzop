@@ -1,6 +1,6 @@
 <!-- GENERATED FROM README.md by zenutils gen-readme-crates.sh — DO NOT EDIT. -->
 
-# zenzop [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenzop/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenzop/actions/workflows/ci.yml)
+# zenzop
 
 A faster fork of the [Zopfli](https://github.com/google/zopfli) DEFLATE compressor, written in Rust. Pure Rust, `#![forbid(unsafe_code)]`, `no_std` + `alloc` compatible.
 
