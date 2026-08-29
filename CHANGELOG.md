@@ -27,6 +27,13 @@
   with `Options::default().with_iteration_cap(n)`.
 
 ### Fixed
+- Pushes to `main` now cancel their superseded CI runs. `ci.yml` keyed its
+  concurrency group on `${{ github.head_ref || github.run_id }}`.
+  `github.head_ref` is populated only for `pull_request` events, so on a push it
+  was empty and the group fell through to `github.run_id` — unique per run, so no
+  two pushes ever shared a group and `cancel-in-progress` could never fire. Now
+  keyed on `${{ github.ref }}`, which is set for both event types, so PR
+  cancellation is unchanged and consecutive pushes supersede each other.
 - Compute-DoS footgun: previously, an `Options` with `iteration_count = u64::MAX` (or
   `iterations_without_improvement = u64::MAX`, the default) and the default unstoppable
   `Stop` would loop until heat death. The internal cap turns that into a finite worst case.
