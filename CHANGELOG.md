@@ -27,6 +27,15 @@
   with `Options::default().with_iteration_cap(n)`.
 
 ### Fixed
+- **CI green again after 70 days red** (2026-06-20 .. 2026-08-29). The `Clippy` and
+  `Format` jobs had both failed on every push since PR #4 (`maximum_block_splits=0
+  means unlimited`) merged with its own CI run already red. Both failures were in the
+  one test that PR added, `blocksplitter::tests::maxblocks_zero_is_unlimited_not_no_split`:
+  two `core::iter::repeat(b).take(4096)` calls that clippy's `manual_repeat_n` rejects
+  under `-D warnings` (now `repeat_n(b, 4096)` — same output, and `ExactSizeIterator`,
+  so `Vec::extend` reserves exactly), and two asserts one column past rustfmt's
+  `fn_call_width` heuristic. Every other job in the matrix — 6 platforms, i686, WASM,
+  MSRV — was green throughout; nothing about the crate's behaviour was broken.
 - Pushes to `main` now cancel their superseded CI runs. `ci.yml` keyed its
   concurrency group on `${{ github.head_ref || github.run_id }}`.
   `github.head_ref` is populated only for `pull_request` events, so on a push it
