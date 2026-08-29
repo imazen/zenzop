@@ -290,9 +290,15 @@ mod tests {
         blocksplit(&data, 0, data.len(), 1, &mut sp_one);
 
         // `0` == unlimited: identical to an effectively-unbounded cap.
-        assert_eq!(sp_zero, sp_big, "maxblocks=0 must equal unlimited (u16::MAX)");
+        assert_eq!(
+            sp_zero, sp_big,
+            "maxblocks=0 must equal unlimited (u16::MAX)"
+        );
         // ...and it actually splits (the old `!= 0 &&` made `0` produce none).
-        assert!(!sp_zero.is_empty(), "varied data should produce split points");
+        assert!(
+            !sp_zero.is_empty(),
+            "varied data should produce split points"
+        );
         // `maxblocks=1` caps at a single block (no split points).
         assert!(sp_one.is_empty(), "maxblocks=1 means one block (no splits)");
     }
