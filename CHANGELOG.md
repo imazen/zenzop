@@ -50,6 +50,8 @@
   has no equivalent.
 
 ### Changed
+- Refreshed `Cargo.lock` within the existing requirements, third-party only (62d705d). `archmage`, `archmage-macros` and `zenbench` were pinned back to the versions the lock already held (0.9.26, 0.9.26, 0.1.8) — zen-family crates whose requirements are being re-governed elsewhere — and `zenflate` and `enough` were already at their ceilings. Third-party movers: `log` 0.4.32 → 0.4.34, `rand` 0.9.4 → 0.9.5, `libc` 0.2.186 → 0.2.189, `crc32fast` 1.5.0 → 1.5.1, `clap` 4.6.1 → 4.6.6, `serde` 1.0.228 → 1.0.229, the crossbeam crates, and the proc-macro chain `proc-macro2`/`quote`/`syn`. **Compressed output is byte-identical**: `log` and the proc-macro chain are both on the library's runtime graph, so an out-of-tree harness compressed 720 cases (5 content kinds × 12 sizes from 0 to 120,000 bytes × 4 iteration counts × deflate/zlib/gzip) against both dependency sets — identical per-case hashes and identical 4,924,527-byte blob (`fnv1a64 03f363b37180c399`) either way. `test/run.sh`'s gz-validation corpus also passes clean.
+- Requirements for `rayon` and `zopfli` are now written as full `x.y.z`: `"1.10"` → `"1.12.0"` and `"0.8"` → `"0.8.3"` (d15c629). `Cargo.lock` is byte-identical after the edit. No third-party dependency was behind — all six direct requirements were cross-checked against the crates.io API and every one is at its latest published version.
 - README overhaul: standardized zen* badge row (CI label + MSRV badge), `## Quick start`,
   and a reproducible benchmarks section. Split the crates.io README into a generated
   `README.crates.md` (`readme` now points to it). Dropped the unverified "beats ECT-9"
