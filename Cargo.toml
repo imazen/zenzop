@@ -45,7 +45,7 @@ required-features = ["gzip", "std", "zlib"]
 [dependencies]
 enough = { version = "0.4.3", default-features = false }
 log = { version = "0.4.28", optional = true }
-rayon = { version = "1.10", optional = true }
+rayon = { version = "1.12.0", optional = true }
 zenflate = { version = "0.3.4", default-features = false, optional = true }
 
 [dev-dependencies]
@@ -53,7 +53,7 @@ zenbench = { version = "0.1.2", features = ["criterion-compat"] }
 miniz_oxide = "0.9.1"
 proptest = "1.7.0"
 proptest-derive = "0.8.0"
-zopfli = "0.8"
+zopfli = "0.8.3"
 
 [[example]]
 name = "count_cache_misses"
