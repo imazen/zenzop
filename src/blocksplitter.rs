@@ -277,9 +277,9 @@ mod tests {
     fn maxblocks_zero_is_unlimited_not_no_split() {
         // Four distinct ~4 KiB regions so the splitter finds split points.
         let mut data = Vec::with_capacity(16 * 1024);
-        data.extend(core::iter::repeat(b'A').take(4096));
+        data.extend(core::iter::repeat_n(b'A', 4096));
         data.extend((0..4096u32).map(|i| i.wrapping_mul(2_654_435_761) as u8));
-        data.extend(core::iter::repeat(b'Z').take(4096));
+        data.extend(core::iter::repeat_n(b'Z', 4096));
         data.extend((0..4096u32).map(|i| (i % 5) as u8));
 
         let mut sp_zero = Vec::new();
