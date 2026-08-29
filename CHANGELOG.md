@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Known issues
+- **`Dependabot Updates` has shown one failed run since 2026-04-22, and it is
+  not diagnosable or fixable from inside this repository.** Investigated
+  2026-08-29. The facts: exactly two Dependabot runs exist (`2026-04-14`
+  success, `2026-04-22` failure — "cargo in /. for rand"), both `event:
+  dynamic`, i.e. GitHub-side jobs with no workflow file in this repo. Their logs
+  are past retention (`/actions/runs/24804827867/logs` → HTTP 410), so the
+  actual error is gone and cannot be recovered. There is **no**
+  `.github/dependabot.yml`; version updates are configured through
+  `.github/renovate.json` (`config:base`, `schedule:monthly`). Dependabot still
+  runs because *security* updates are enabled repo-side
+  (`/automated-security-fixes` → `{"enabled": true, "paused": false}`), which
+  needs no config file. Today there are **zero open Dependabot alerts** and
+  `rand` is at 0.9.4 in `Cargo.lock`, so nothing is outstanding.
+
+  Deliberately not "fixed": adding a `dependabot.yml` would put a second
+  version-update bot alongside Renovate, which is worse than a stale red mark.
+  The only other lever is a repository setting (turn off Dependabot security
+  updates and rely on Renovate, or leave it and let the next security advisory
+  re-run the job), and that is the owner's call. Re-triggering it is UI-only —
+  Insights → Dependency graph → Dependabot → "Check for updates"; the REST API
+  has no equivalent.
+
 ### Changed
 - README overhaul: standardized zen* badge row (CI label + MSRV badge), `## Quick start`,
   and a reproducible benchmarks section. Split the crates.io README into a generated
