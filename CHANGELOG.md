@@ -3,9 +3,12 @@
 ## Unreleased
 
 ### Known issues
-- **`Dependabot Updates` has shown one failed run since 2026-04-22, and it is
-  not diagnosable or fixable from inside this repository.** Investigated
-  2026-08-29. The facts: exactly two Dependabot runs exist (`2026-04-14`
+- **`Dependabot Updates` has shown one failed run since 2026-04-22. Its error
+  text is unrecoverable, but the trigger is identified and the condition is
+  verified absent — and it is not fixable from inside this repository.**
+  Investigated 2026-08-29; the "what triggered it / does it still apply"
+  half was answered later the same day by a cross-repo sweep (see the
+  follow-up paragraph). The facts: exactly two Dependabot runs exist (`2026-04-14`
   success, `2026-04-22` failure — "cargo in /. for rand"), both `event:
   dynamic`, i.e. GitHub-side jobs with no workflow file in this repo. Their logs
   are past retention (`/actions/runs/24804827867/logs` → HTTP 410), so the
@@ -16,6 +19,27 @@
   (`/automated-security-fixes` → `{"enabled": true, "paused": false}`), which
   needs no config file. Today there are **zero open Dependabot alerts** and
   `rand` is at 0.9.4 in `Cargo.lock`, so nothing is outstanding.
+
+  **Follow-up 2026-08-29 (workspace-wide sweep of the six repos showing this same
+  red workflow — zenrav1e, zenzop, zenquant, zenavif, zenpipe, zenmetrics).** The
+  log text is still gone, but two things that looked unknowable are not:
+  - **The trigger is identified.** The Dependabot *alerts* API outlives the run
+    logs. The failure was driven by a single advisory, **GHSA-cq8v-f236-94qc** on
+    `rand`, opened `2026-04-22T21:36Z` against `Cargo.lock` (vulnerable
+    `>= 0.9.0, < 0.9.3`, fixed in `0.9.3`), which reached **`state: fixed` on
+    2026-05-08**. The same advisory drove the April failures in four sibling
+    repos — one advisory, six red workflows, which is why they clustered.
+  - **The condition is verified absent, not merely presumed.** `cargo metadata`
+    in a **fresh standalone clone** of `main` exits 0. That lone-checkout,
+    no-siblings environment is exactly what Dependabot runs in, so a run today
+    would resolve. The sweep found two concrete mechanisms behind the *other*
+    repos' failures — workspace members depending on sibling repos through `../`
+    paths a lone checkout cannot see (zenavif, zenmetrics), and stale `Cargo.lock`
+    files committed inside workspace members, which cargo never reads but the
+    dependency graph does (zenpipe) — and **neither exists here.**
+
+  This does not change the decision below; it replaces "unknown and unknowable"
+  with "known one-off, condition gone".
 
   Deliberately not "fixed": adding a `dependabot.yml` would put a second
   version-update bot alongside Renovate, which is worse than a stale red mark.
