@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
+use enough::{Stop, StopReason};
+
 #[cfg(feature = "std")]
 use log::{debug, log_enabled};
 
@@ -158,9 +160,14 @@ fn print_block_split_points(lz77: &Lz77Store, lz77splitpoints: &[usize]) {
 /// Does blocksplitting on LZ77 data.
 /// The output splitpoints are indices in the LZ77 data.
 /// maxblocks: set a limit to the amount of blocks. Set to 0 to mean no limit.
-pub fn blocksplit_lz77(lz77: &Lz77Store, maxblocks: u16, splitpoints: &mut Vec<usize>) {
+pub fn blocksplit_lz77(
+    lz77: &Lz77Store,
+    maxblocks: u16,
+    splitpoints: &mut Vec<usize>,
+    stop: &dyn Stop,
+) -> Result<(), StopReason> {
     if lz77.size() < 10 {
-        return; /* This code fails on tiny files. */
+        return Ok(()); /* This code fails on tiny files. */
     }
 
     let mut numblocks = 1u32;
@@ -177,6 +184,7 @@ pub fn blocksplit_lz77(lz77: &Lz77Store, maxblocks: u16, splitpoints: &mut Vec<u
     // guarantees termination. (Previously `maxblocks != 0 &&` inverted this so
     // `0` produced *no* splitting; non-zero `maxblocks` is unaffected.)
     while maxblocks == 0 || numblocks < u32::from(maxblocks) {
+        stop.check()?;
         debug_assert!(lstart < lend);
         let find_minimum_result = find_minimum(
             |i| estimate_cost(lz77, lstart, i, &scratch) + estimate_cost(lz77, i, lend, &scratch),
@@ -214,6 +222,7 @@ pub fn blocksplit_lz77(lz77: &Lz77Store, maxblocks: u16, splitpoints: &mut Vec<u
     }
 
     print_block_split_points(lz77, splitpoints);
+    Ok(())
 }
 
 /// Does blocksplitting on uncompressed data.
@@ -234,18 +243,19 @@ pub fn blocksplit(
     inend: usize,
     maxblocks: u16,
     splitpoints: &mut Vec<usize>,
-) {
+    stop: &dyn Stop,
+) -> Result<(), StopReason> {
     splitpoints.clear();
     let mut store = Lz77Store::with_capacity(inend - instart);
 
     /* Unintuitively, Using a simple LZ77 method here instead of lz77_optimal
     results in better blocks. */
     {
-        store.greedy(&mut NoCache, in_data, instart, inend);
+        store.greedy(&mut NoCache, in_data, instart, inend, stop)?;
     }
 
     let mut lz77splitpoints = Vec::with_capacity(maxblocks as usize);
-    blocksplit_lz77(&store, maxblocks, &mut lz77splitpoints);
+    blocksplit_lz77(&store, maxblocks, &mut lz77splitpoints, stop)?;
 
     let nlz77points = lz77splitpoints.len();
 
@@ -264,6 +274,7 @@ pub fn blocksplit(
         }
     }
     debug_assert_eq!(splitpoints.len(), nlz77points);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -283,11 +294,19 @@ mod tests {
         data.extend((0..4096u32).map(|i| (i % 5) as u8));
 
         let mut sp_zero = Vec::new();
-        blocksplit(&data, 0, data.len(), 0, &mut sp_zero);
+        blocksplit(&data, 0, data.len(), 0, &mut sp_zero, &enough::Unstoppable).unwrap();
         let mut sp_big = Vec::new();
-        blocksplit(&data, 0, data.len(), u16::MAX, &mut sp_big);
+        blocksplit(
+            &data,
+            0,
+            data.len(),
+            u16::MAX,
+            &mut sp_big,
+            &enough::Unstoppable,
+        )
+        .unwrap();
         let mut sp_one = Vec::new();
-        blocksplit(&data, 0, data.len(), 1, &mut sp_one);
+        blocksplit(&data, 0, data.len(), 1, &mut sp_one, &enough::Unstoppable).unwrap();
 
         // `0` == unlimited: identical to an effectively-unbounded cap.
         assert_eq!(

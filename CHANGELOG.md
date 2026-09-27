@@ -76,6 +76,22 @@
   with `Options::default().with_iteration_cap(n)`.
 
 ### Fixed
+- Cooperative cancellation (`Stop`) is now polled inside the expensive LZ77
+  work instead of only once per squeeze iteration. Previously a single
+  `get_best_lengths` dynamic-programming pass over a ~1 MiB block ran with no
+  polls at all (~1.15 s worst gap on a 4 MiB adversarial input). Now:
+  `get_best_lengths` polls every 128 DP positions, every 32K cumulative
+  hash-chain steps, and inside its 32K-position hash-table warmup;
+  `find_longest_match` polls every 1024 chain steps within one call;
+  `greedy` polls per stride and pads the store tail with literals on
+  non-`Cancelled` stops so the best-effort store stays valid; `blocksplit` /
+  `blocksplit_lz77` poll per split iteration; `lz77_optimal_fixed`,
+  `lz77_optimal_run`, `add_all_blocks`, and `add_lz77_block_auto_type` take
+  and propagate `&dyn Stop`. Poll checks collapse to a discriminant test via
+  `Option<&dyn Stop>` for `Unstoppable`, and no check sits inside a
+  per-symbol inner loop. Measured on `zenzop-squeeze-enhanced-4mb`
+  (4 MiB mixed input, `enhanced`, `maximum_block_splits=1`): 601K polls,
+  ~22.6 µs mean gap, 28.4 ms worst gap (was 1.15 s), byte-identical output.
 - **CI green again after 70 days red** (2026-06-20 .. 2026-08-29). The `Clippy` and
   `Format` jobs had both failed on every push since PR #4 (`maximum_block_splits=0
   means unlimited`) merged with its own CI run already red. Both failures were in the
