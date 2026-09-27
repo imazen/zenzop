@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 use core::cmp;
 
+use enough::{Stop, StopReason};
+
 use crate::{
     cache::Cache,
     hash::{Which, ZopfliHash},
@@ -25,6 +27,24 @@ impl LitLen {
         }
     }
 }
+
+/// Positions between `stop` polls in the position loops of `greedy` /
+/// `get_best_lengths`. Bounds regions where per-position cost is moderate
+/// (~tens of µs from the 258-entry sublen cost-model pass) but little hash
+/// chain work is consumed; cheap positions stay far below this cadence.
+pub(crate) const STOP_POS_STRIDE: usize = 128;
+/// Cumulative hash-chain steps between `stop` polls. A single
+/// `find_longest_match` position can burn up to `ZOPFLI_MAX_CHAIN_HITS`
+/// steps on adversarial input, so a *work* budget — not a position count —
+/// is what keeps gaps short in slow regions without storming on easy data.
+pub(crate) const STOP_WORK_BUDGET: usize = 32768;
+/// Chain steps between `stop` polls inside a single `find_longest_match_loop`
+/// call, which can consume the whole `ZOPFLI_MAX_CHAIN_HITS` budget.
+const STOP_CHAIN_STRIDE: usize = 1024;
+/// Positions between `stop` polls in the hash-table prefill ("warmup") loop at
+/// the head of `get_best_lengths` — up to `ZOPFLI_WINDOW_SIZE` cheap hash
+/// updates before the DP loop's own position cadence takes over.
+pub(crate) const STOP_WARMUP_STRIDE: usize = 8192;
 
 /// Stores lit/length and dist pairs for LZ77.
 /// Parameter litlens: Contains the literal symbols or length values.
@@ -152,10 +172,23 @@ impl Lz77Store {
     /// The result is placed in the `Lz77Store`.
     /// If instart is larger than 0, it uses values before instart as starting
     /// dictionary.
-    pub fn greedy<C: Cache>(&mut self, lmc: &mut C, in_data: &[u8], instart: usize, inend: usize) {
+    /// Returns `Ok(true)` when the greedy pass ran to completion, `Ok(false)`
+    /// when a non-`Cancelled` stop fired partway through — in that case the
+    /// remaining positions are emitted as literals so the store still covers
+    /// `[instart, inend)` (degraded compression, valid stream). `Cancelled`
+    /// propagates as `Err`.
+    pub fn greedy<C: Cache>(
+        &mut self,
+        lmc: &mut C,
+        in_data: &[u8],
+        instart: usize,
+        inend: usize,
+        stop: &dyn Stop,
+    ) -> Result<bool, StopReason> {
         if instart == inend {
-            return;
+            return Ok(true);
         }
+        let stop = stop.may_stop().then_some(stop);
         let windowstart = instart.saturating_sub(ZOPFLI_WINDOW_SIZE);
         let mut h = ZopfliHash::new();
 
@@ -170,17 +203,57 @@ impl Lz77Store {
         let mut leng;
         let mut dist;
         let mut lengthscore;
+        let mut next_check = instart.saturating_add(STOP_POS_STRIDE);
+        let mut work = 0usize;
 
         /* Lazy matching. */
         let mut prev_length = 0;
         let mut prev_match = 0;
         let mut prevlengthscore;
         let mut match_available = false;
+        let mut stopped = false;
         while i < inend {
+            if i >= next_check {
+                if let Err(reason) = stop.check() {
+                    stopped = true;
+                    if reason == StopReason::Cancelled {
+                        return Err(StopReason::Cancelled);
+                    }
+                    break;
+                }
+                next_check = i.saturating_add(STOP_POS_STRIDE);
+            }
             h.update(arr, i);
 
-            let longest_match =
-                find_longest_match(lmc, &h, arr, i, inend, instart, ZOPFLI_MAX_MATCH, &mut None);
+            let (longest_match, steps) = match find_longest_match_stop(
+                lmc,
+                &h,
+                arr,
+                i,
+                inend,
+                instart,
+                ZOPFLI_MAX_MATCH,
+                &mut None,
+                stop,
+            ) {
+                Ok(v) => v,
+                Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+                Err(_) => {
+                    stopped = true;
+                    break;
+                }
+            };
+            work += steps;
+            if work >= STOP_WORK_BUDGET {
+                match stop.check() {
+                    Ok(()) => work = 0,
+                    Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+                    Err(_) => {
+                        stopped = true;
+                        break;
+                    }
+                }
+            }
             dist = longest_match.distance;
             leng = longest_match.length;
             lengthscore = get_length_score(i32::from(leng), i32::from(dist));
@@ -241,6 +314,20 @@ impl Lz77Store {
             }
             i += 1;
         }
+        if stopped {
+            // Pad the tail with literals so the store still covers the whole
+            // block — the "best effort so far" contract requires a valid store.
+            // Start at the last emitted item's end: lazy matching may already
+            // have emitted an item covering bytes past `i`.
+            let covered = match (self.pos.last(), self.litlens.last()) {
+                (Some(&pos), Some(item)) => pos as usize + item.size(),
+                _ => instart,
+            };
+            for (j, &b) in arr.iter().enumerate().take(inend).skip(covered) {
+                self.lit_len_dist(u16::from(b), 0, j);
+            }
+        }
+        Ok(!stopped)
     }
 
     /// Builds the LZ77 store from precomputed (length, dist) pairs.
@@ -412,8 +499,11 @@ fn get_match(scan_arr: &[u8], match_arr: &[u8]) -> usize {
     max_prefix_len
 }
 
+/// Stop-aware longest-match search; also reports the number of hash-chain
+/// steps consumed so callers can poll on a *work* budget rather than a
+/// position count.
 #[allow(clippy::too_many_arguments)]
-pub fn find_longest_match<C: Cache>(
+pub(crate) fn find_longest_match_stop<C: Cache>(
     lmc: &mut C,
     h: &ZopfliHash,
     array: &[u8],
@@ -422,12 +512,13 @@ pub fn find_longest_match<C: Cache>(
     blockstart: usize,
     limit: usize,
     sublen: &mut Option<&mut [u16]>,
-) -> LongestMatch {
+    stop: Option<&dyn Stop>,
+) -> Result<(LongestMatch, usize), StopReason> {
     let mut longest_match = lmc.try_get(pos, limit, sublen, blockstart);
 
     if longest_match.from_cache {
         debug_assert!(pos + (longest_match.length as usize) <= size);
-        return longest_match;
+        return Ok((longest_match, 0));
     }
 
     let mut limit = longest_match.limit;
@@ -443,14 +534,15 @@ pub fn find_longest_match<C: Cache>(
         longest_match.length = 0;
         longest_match.from_cache = false;
         longest_match.limit = 0;
-        return longest_match;
+        return Ok((longest_match, 0));
     }
 
     if pos + limit > size {
         limit = size - pos;
     }
 
-    let (bestdist, bestlength) = find_longest_match_loop(h, array, pos, size, limit, sublen);
+    let (bestdist, bestlength, steps) =
+        find_longest_match_loop(h, array, pos, size, limit, sublen, stop)?;
 
     lmc.store(pos, limit, sublen, bestdist, bestlength, blockstart);
 
@@ -461,7 +553,7 @@ pub fn find_longest_match<C: Cache>(
     longest_match.length = bestlength;
     longest_match.from_cache = false;
     longest_match.limit = limit;
-    longest_match
+    Ok((longest_match, steps))
 }
 
 fn find_longest_match_loop(
@@ -471,7 +563,8 @@ fn find_longest_match_loop(
     size: usize,
     limit: usize,
     sublen: &mut Option<&mut [u16]>,
-) -> (u16, u16) {
+    stop: Option<&dyn Stop>,
+) -> Result<(u16, u16, usize), StopReason> {
     let mut which_hash = Which::Hash1;
     let hpos = pos & ZOPFLI_WINDOW_MASK;
 
@@ -493,6 +586,13 @@ fn find_longest_match_loop(
 
     /* Go through all distances. */
     while dist < ZOPFLI_WINDOW_SIZE && chain_counter > 0 {
+        // A single call can burn the full ZOPFLI_MAX_CHAIN_HITS budget.
+        // `> 0` keeps the check off the first step so calls that exit
+        // immediately stay free of per-call poll traffic.
+        let steps = ZOPFLI_MAX_CHAIN_HITS - chain_counter;
+        if steps > 0 && steps & (STOP_CHAIN_STRIDE - 1) == 0 {
+            stop.check()?;
+        }
         let mut currentlength = 0;
 
         debug_assert!(p < ZOPFLI_WINDOW_SIZE);
@@ -560,7 +660,11 @@ fn find_longest_match_loop(
 
         chain_counter -= 1;
     }
-    (bestdist as u16, bestlength as u16)
+    Ok((
+        bestdist as u16,
+        bestlength as u16,
+        ZOPFLI_MAX_CHAIN_HITS - chain_counter,
+    ))
 }
 
 /// Gets a score of the length given the distance. Typically, the score of the

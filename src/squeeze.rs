@@ -23,7 +23,10 @@ use crate::{
     },
     hash::ZopfliHash,
     katajainen::{HuffmanScratch, length_limited_code_lengths_into},
-    lz77::{LitLen, Lz77Store, find_longest_match},
+    lz77::{
+        LitLen, Lz77Store, STOP_POS_STRIDE, STOP_WARMUP_STRIDE, STOP_WORK_BUDGET,
+        find_longest_match_stop,
+    },
     symbols::{
         get_dist_extra_bits, get_dist_symbol, get_dist_symbol_extra_bits, get_length_extra_bits,
         get_length_symbol, get_length_symbol_extra_bits,
@@ -315,7 +318,7 @@ fn get_cost_model_min_cost<F: Fn(usize, u16) -> f64>(costmodel: F) -> f64 {
 /// `length_array`: output array of size `(inend - instart)` which will receive the best
 ///     length to reach this byte from a previous byte.
 /// returns the cost that was, according to the `costmodel`, needed to get to the end.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // Not feasible to refactor in a more readable way
 fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     lmc: &mut C,
     in_data: &[u8],
@@ -328,7 +331,8 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     dist_array: &mut Vec<u16>,
     sublen: &mut Vec<u16>,
     skip_hash: bool,
-) -> f64 {
+    stop: &dyn Stop,
+) -> Result<f64, StopReason> {
     // Best cost to get here so far.
     let blocksize = inend - instart;
     length_array.clear();
@@ -336,8 +340,15 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     dist_array.clear();
     dist_array.resize(blocksize + 1, 0);
     if instart == inend {
-        return 0.0;
+        return Ok(0.0);
     }
+    // Collapse to `None` for `Unstoppable` so the strided check is a
+    // discriminant test, not a vtable call.
+    let stop = stop.may_stop().then_some(stop);
+    // Bound the span since the caller's last poll: the previous call's DP
+    // tail plus the inter-iteration cost/statistics work can accumulate
+    // tens of ms before this function's own cadence begins.
+    stop.check()?;
     let windowstart = instart.saturating_sub(ZOPFLI_WINDOW_SIZE);
 
     let arr = &in_data[..inend];
@@ -347,12 +358,18 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
         // cache — neither hash chains nor the `same` array are needed.
         h.reset();
         h.warmup(arr, windowstart, inend);
+        let mut next_warmup_check = windowstart.saturating_add(STOP_WARMUP_STRIDE);
         for i in windowstart..instart {
             h.update(arr, i);
+            if i >= next_warmup_check {
+                stop.check()?;
+                next_warmup_check = i.saturating_add(STOP_WARMUP_STRIDE);
+            }
         }
     }
 
     costs.resize(blocksize + 1, 0.0);
+    stop.check()?;
     for cost in costs.iter_mut().take(blocksize + 1).skip(1) {
         *cost = f32::INFINITY;
     }
@@ -360,10 +377,15 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
 
     let mut i = instart;
     let mut leng;
-    let mut longest_match;
+    let mut next_check = instart.saturating_add(STOP_POS_STRIDE);
+    let mut work = 0usize;
     sublen.resize(ZOPFLI_MAX_MATCH + 1, 0);
     let mincost = get_cost_model_min_cost(&costmodel);
     while i < inend {
+        if i >= next_check {
+            stop.check()?;
+            next_check = i.saturating_add(STOP_POS_STRIDE);
+        }
         let mut j = i - instart; // Index in the costs array and length_array.
         if !skip_hash {
             h.update(arr, i);
@@ -393,7 +415,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
             }
         }
 
-        longest_match = find_longest_match(
+        let (longest_match, steps) = find_longest_match_stop(
             lmc,
             h,
             arr,
@@ -402,7 +424,13 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
             instart,
             ZOPFLI_MAX_MATCH,
             &mut Some(sublen.as_mut_slice()),
-        );
+            stop,
+        )?;
+        work += steps;
+        if work >= STOP_WORK_BUDGET {
+            stop.check()?;
+            work = 0;
+        }
         leng = longest_match.length;
 
         // Literal.
@@ -439,7 +467,7 @@ fn get_best_lengths<F: Fn(usize, u16) -> f64, C: Cache>(
     }
 
     debug_assert!(costs[blocksize] >= 0.0);
-    f64::from(costs[blocksize])
+    Ok(f64::from(costs[blocksize]))
 }
 
 /// Calculates the optimal path of lz77 lengths to use, from the calculated
@@ -513,7 +541,8 @@ fn lz77_optimal_run<F: Fn(usize, u16) -> f64, C: Cache>(
     sublen: &mut Vec<u16>,
     path_buf: &mut Vec<(u16, u16)>,
     skip_hash: bool,
-) {
+    stop: &dyn Stop,
+) -> Result<(), StopReason> {
     let cost = get_best_lengths(
         lmc,
         in_data,
@@ -526,10 +555,12 @@ fn lz77_optimal_run<F: Fn(usize, u16) -> f64, C: Cache>(
         dist_array,
         sublen,
         skip_hash,
-    );
+        stop,
+    )?;
     trace(inend - instart, length_array, dist_array, path_buf);
     store.store_from_path(in_data, instart, path_buf);
     debug_assert!(cost < f64::INFINITY);
+    Ok(())
 }
 
 /// Does the same as `lz77_optimal`, but optimized for the fixed tree of the
@@ -546,13 +577,14 @@ pub fn lz77_optimal_fixed<C: Cache>(
     instart: usize,
     inend: usize,
     store: &mut Lz77Store,
-) {
+    stop: &dyn Stop,
+) -> Result<bool, StopReason> {
     let mut costs = Vec::with_capacity(inend - instart);
     let mut length_array = Vec::new();
     let mut dist_array = Vec::new();
     let mut sublen = Vec::new();
     let mut path_buf = Vec::new();
-    lz77_optimal_run(
+    match lz77_optimal_run(
         lmc,
         in_data,
         instart,
@@ -566,7 +598,17 @@ pub fn lz77_optimal_fixed<C: Cache>(
         &mut sublen,
         &mut path_buf,
         false,
-    );
+        stop,
+    ) {
+        Ok(()) => Ok(true),
+        Err(StopReason::Cancelled) => Err(StopReason::Cancelled),
+        Err(_) => {
+            // The interrupted DP has not emitted a path. Complete this fixed
+            // block with a valid greedy parse, including its literal fallback.
+            store.greedy(lmc, in_data, instart, inend, stop)?;
+            Ok(false)
+        }
+    }
 }
 
 /// Calculates lit/len and dist pairs for given data.
@@ -589,7 +631,7 @@ pub fn lz77_optimal<C: Cache>(
     let mut outputstore = Lz77Store::new();
 
     /* Initial run. */
-    currentstore.greedy(lmc, in_data, instart, inend);
+    let greedy_complete = currentstore.greedy(lmc, in_data, instart, inend, stop)?;
     let mut stats = SymbolStats::default();
     stats.get_statistics(&currentstore);
 
@@ -632,7 +674,7 @@ pub fn lz77_optimal<C: Cache>(
     };
     let mut lastrandomstep = u64::MAX;
 
-    let mut fully_optimized = true;
+    let mut fully_optimized = greedy_complete;
 
     // Enhanced-mode state: limit diversification attempts and support checkpoint/restore
     let mut diversification_attempts: u64 = 0;
@@ -667,7 +709,7 @@ pub fn lz77_optimal<C: Cache>(
         let skip_hash = current_iteration > 0 && lmc.is_sublen_complete();
         // Run DP forward pass + trace without building an Lz77Store.
         // Frequencies and block cost are computed directly from the path.
-        get_best_lengths(
+        match get_best_lengths(
             lmc,
             in_data,
             instart,
@@ -679,9 +721,33 @@ pub fn lz77_optimal<C: Cache>(
             &mut dist_array,
             &mut sublen,
             skip_hash,
-        );
+            stop,
+        ) {
+            Ok(_) => {}
+            Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+            Err(_) => {
+                fully_optimized = false;
+                break;
+            }
+        }
+        match stop.check() {
+            Ok(()) => {}
+            Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+            Err(_) => {
+                fully_optimized = false;
+                break;
+            }
+        }
         trace(inend - instart, &length_array, &dist_array, &mut path_buf);
         let (ll_freq, d_freq) = compute_frequencies_from_path(in_data, instart, &path_buf);
+        match stop.check() {
+            Ok(()) => {}
+            Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+            Err(_) => {
+                fully_optimized = false;
+                break;
+            }
+        }
         let cost = calculate_block_cost_from_frequencies(
             &ll_freq,
             &d_freq,
@@ -717,10 +783,18 @@ pub fn lz77_optimal<C: Cache>(
             // Enhanced: ultra mode — one additional pass with Huffman code-length
             // cost model derived from the best result.
             if enhanced && current_iteration > 4 {
+                match stop.check() {
+                    Ok(()) => {}
+                    Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+                    Err(_) => {
+                        fully_optimized = false;
+                        break;
+                    }
+                }
                 let mut ultra_stats = SymbolStats::default();
                 ultra_stats.calculate_huffman_costs(&beststats, &mut huffman_scratch);
                 let cost_model = CostModel::from_stats(&ultra_stats);
-                get_best_lengths(
+                match get_best_lengths(
                     lmc,
                     in_data,
                     instart,
@@ -732,10 +806,34 @@ pub fn lz77_optimal<C: Cache>(
                     &mut dist_array,
                     &mut sublen,
                     lmc.is_sublen_complete(),
-                );
+                    stop,
+                ) {
+                    Ok(_) => {}
+                    Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+                    Err(_) => {
+                        fully_optimized = false;
+                        break;
+                    }
+                }
+                match stop.check() {
+                    Ok(()) => {}
+                    Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+                    Err(_) => {
+                        fully_optimized = false;
+                        break;
+                    }
+                }
                 trace(inend - instart, &length_array, &dist_array, &mut path_buf);
                 let (ultra_ll, ultra_d) =
                     compute_frequencies_from_path(in_data, instart, &path_buf);
+                match stop.check() {
+                    Ok(()) => {}
+                    Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+                    Err(_) => {
+                        fully_optimized = false;
+                        break;
+                    }
+                }
                 let ultra_cost = calculate_block_cost_from_frequencies(
                     &ultra_ll,
                     &ultra_d,

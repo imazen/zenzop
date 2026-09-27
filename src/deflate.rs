@@ -4,7 +4,16 @@ use core::{cmp, iter};
 #[cfg(feature = "std")]
 use log::{debug, log_enabled};
 
-use enough::Stop;
+use enough::{Stop, StopReason};
+
+// A budget stops optimization, but must not prevent writing the valid result.
+fn check_cancelled(stop: &dyn Stop) -> Result<bool, Error> {
+    match stop.check() {
+        Ok(()) => Ok(true),
+        Err(StopReason::Cancelled) => Err(stop_to_error(StopReason::Cancelled)),
+        Err(_) => Ok(false),
+    }
+}
 
 use crate::{
     Error, Options, Write,
@@ -315,13 +324,15 @@ fn deflate_part<W: Write>(
         BlockType::Fixed => {
             let mut store = Lz77Store::with_capacity(inend - instart);
 
-            lz77_optimal_fixed(
+            let optimized = lz77_optimal_fixed(
                 &mut ZopfliLongestMatchCache::new(inend - instart),
                 in_data,
                 instart,
                 inend,
                 &mut store,
-            );
+                stop,
+            )
+            .map_err(stop_to_error)?;
             add_lz77_block(
                 btype,
                 final_block,
@@ -333,7 +344,7 @@ fn deflate_part<W: Write>(
                 options.enhanced,
                 bitwise_writer,
             )?;
-            Ok(true)
+            Ok(optimized)
         }
         BlockType::Dynamic => blocksplit_attempt(
             options,
@@ -1437,16 +1448,20 @@ fn add_lz77_block_auto_type<W: Write>(
     expected_data_size: usize,
     enhanced: bool,
     bitwise_writer: &mut BitwiseWriter<W>,
+    stop: &dyn Stop,
 ) -> Result<(), Error> {
+    check_cancelled(stop)?;
     let uncompressedcost =
         calculate_block_size(lz77, lstart, lend, BlockType::Uncompressed, enhanced);
     let mut fixedcost = calculate_block_size(lz77, lstart, lend, BlockType::Fixed, enhanced);
+    check_cancelled(stop)?;
     let dyncost = calculate_block_size(lz77, lstart, lend, BlockType::Dynamic, enhanced);
 
     /* Whether to perform the expensive calculation of creating an optimal block
     with fixed huffman tree to check if smaller. Only do this for small blocks or
     blocks which already are pretty good with fixed huffman tree. */
-    let expensivefixed = (lz77.size() < 1000) || fixedcost <= dyncost * 1.1;
+    let expensivefixed =
+        check_cancelled(stop)? && ((lz77.size() < 1000) || fixedcost <= dyncost * 1.1);
 
     let mut fixedstore = Lz77Store::new();
     if lstart == lend {
@@ -1468,7 +1483,9 @@ fn add_lz77_block_auto_type<W: Write>(
             instart,
             inend,
             &mut fixedstore,
-        );
+            stop,
+        )
+        .map_err(stop_to_error)?;
         fixedcost = calculate_block_size(
             &fixedstore,
             0,
@@ -1675,6 +1692,7 @@ fn add_all_blocks<W: Write>(
     in_data: &[u8],
     enhanced: bool,
     bitwise_writer: &mut BitwiseWriter<W>,
+    stop: &dyn Stop,
 ) -> Result<(), Error> {
     let mut last = 0;
     for &item in splitpoints {
@@ -1687,6 +1705,7 @@ fn add_all_blocks<W: Write>(
             0,
             enhanced,
             bitwise_writer,
+            stop,
         )?;
         last = item;
     }
@@ -1699,6 +1718,7 @@ fn add_all_blocks<W: Write>(
         0,
         enhanced,
         bitwise_writer,
+        stop,
     )
 }
 
@@ -1723,7 +1743,9 @@ fn blocksplit_attempt<W: Write>(
         inend,
         options.maximum_block_splits,
         &mut splitpoints_uncompressed,
-    );
+        stop,
+    )
+    .map_err(stop_to_error)?;
     let npoints = splitpoints_uncompressed.len();
     let mut splitpoints = Vec::with_capacity(npoints);
 
@@ -1760,6 +1782,7 @@ fn blocksplit_attempt<W: Write>(
             .collect::<Result<Vec<_>, _>>()
             .map_err(stop_to_error)?;
         for (i, (store, fo)) in results.iter().enumerate() {
+            check_cancelled(stop)?;
             fully_optimized &= fo;
             totalcost += calculate_block_size_auto_type_with_scratch(
                 store,
@@ -1794,6 +1817,7 @@ fn blocksplit_attempt<W: Write>(
                 stop,
             )
             .map_err(stop_to_error)?;
+            check_cancelled(stop)?;
             fully_optimized &= fo;
             totalcost += calculate_block_size_auto_type_with_scratch(
                 &store,
@@ -1818,7 +1842,8 @@ fn blocksplit_attempt<W: Write>(
         let mut splitpoints2 = Vec::with_capacity(splitpoints_uncompressed.len());
         let mut totalcost2 = 0.0;
 
-        blocksplit_lz77(&lz77, options.maximum_block_splits, &mut splitpoints2);
+        blocksplit_lz77(&lz77, options.maximum_block_splits, &mut splitpoints2, stop)
+            .map_err(stop_to_error)?;
 
         let mut last = 0;
         for &item in &splitpoints2 {
@@ -1851,8 +1876,9 @@ fn blocksplit_attempt<W: Write>(
         in_data,
         options.enhanced,
         bitwise_writer,
+        stop,
     )?;
-    Ok(fully_optimized)
+    Ok(check_cancelled(stop)? && fully_optimized)
 }
 
 /// Since an uncompressed block can be max 65535 in size, it actually adds
