@@ -578,13 +578,13 @@ pub fn lz77_optimal_fixed<C: Cache>(
     inend: usize,
     store: &mut Lz77Store,
     stop: &dyn Stop,
-) -> Result<(), StopReason> {
+) -> Result<bool, StopReason> {
     let mut costs = Vec::with_capacity(inend - instart);
     let mut length_array = Vec::new();
     let mut dist_array = Vec::new();
     let mut sublen = Vec::new();
     let mut path_buf = Vec::new();
-    lz77_optimal_run(
+    match lz77_optimal_run(
         lmc,
         in_data,
         instart,
@@ -599,7 +599,16 @@ pub fn lz77_optimal_fixed<C: Cache>(
         &mut path_buf,
         false,
         stop,
-    )
+    ) {
+        Ok(()) => Ok(true),
+        Err(StopReason::Cancelled) => Err(StopReason::Cancelled),
+        Err(_) => {
+            // The interrupted DP has not emitted a path. Complete this fixed
+            // block with a valid greedy parse, including its literal fallback.
+            store.greedy(lmc, in_data, instart, inend, stop)?;
+            Ok(false)
+        }
+    }
 }
 
 /// Calculates lit/len and dist pairs for given data.
@@ -777,7 +786,10 @@ pub fn lz77_optimal<C: Cache>(
                 match stop.check() {
                     Ok(()) => {}
                     Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
-                    Err(_) => break,
+                    Err(_) => {
+                        fully_optimized = false;
+                        break;
+                    }
                 }
                 let mut ultra_stats = SymbolStats::default();
                 ultra_stats.calculate_huffman_costs(&beststats, &mut huffman_scratch);
@@ -806,7 +818,10 @@ pub fn lz77_optimal<C: Cache>(
                 match stop.check() {
                     Ok(()) => {}
                     Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
-                    Err(_) => break,
+                    Err(_) => {
+                        fully_optimized = false;
+                        break;
+                    }
                 }
                 trace(inend - instart, &length_array, &dist_array, &mut path_buf);
                 let (ultra_ll, ultra_d) =
@@ -814,7 +829,10 @@ pub fn lz77_optimal<C: Cache>(
                 match stop.check() {
                     Ok(()) => {}
                     Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
-                    Err(_) => break,
+                    Err(_) => {
+                        fully_optimized = false;
+                        break;
+                    }
                 }
                 let ultra_cost = calculate_block_cost_from_frequencies(
                     &ultra_ll,

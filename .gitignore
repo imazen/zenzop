@@ -343,3 +343,5 @@ fuzz-*.log
 # target/ is already covered by the unanchored `target/` above.
 !apidoc/Cargo.lock
 .workongoing
+
+.jj/

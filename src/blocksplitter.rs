@@ -184,7 +184,11 @@ pub fn blocksplit_lz77(
     // guarantees termination. (Previously `maxblocks != 0 &&` inverted this so
     // `0` produced *no* splitting; non-zero `maxblocks` is unaffected.)
     while maxblocks == 0 || numblocks < u32::from(maxblocks) {
-        stop.check()?;
+        match stop.check() {
+            Ok(()) => {}
+            Err(StopReason::Cancelled) => return Err(StopReason::Cancelled),
+            Err(_) => break,
+        }
         debug_assert!(lstart < lend);
         let find_minimum_result = find_minimum(
             |i| estimate_cost(lz77, lstart, i, &scratch) + estimate_cost(lz77, i, lend, &scratch),
