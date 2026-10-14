@@ -161,7 +161,7 @@ This is a fork of [google/zopfli](https://github.com/google/zopfli) (Apache-2.0)
 
 ### Origin
 
-Forked from [zopfli-rs/zopfli](https://github.com/zopfli-rs/zopfli), Carol Nichols' well-maintained Rust reimplementation of Google's Zopfli. Enhanced-mode optimizations are derived from [ECT](https://github.com/fhanau/Efficient-Compression-Tool) (Efficient Compression Tool) by Felix Hanau. Thanks to both projects — zenzop builds directly on their work.
+Forked from [zopfli-rs/zopfli](https://github.com/zopfli-rs/zopfli), Carol Nichols' well-maintained Rust reimplementation of Zopfli (Lode Vandevenne and Jyrki Alakuijala). Enhanced-mode optimizations are derived from [ECT](https://github.com/fhanau/Efficient-Compression-Tool) (Efficient Compression Tool) by Felix Hanau. Thanks to both projects — zenzop builds directly on their work.
 
 ### AI-generated code notice
 
