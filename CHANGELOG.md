@@ -76,6 +76,8 @@
   with `Options::default().with_iteration_cap(n)`.
 
 ### Fixed
+- `compress()` now fills exact `ZOPFLI_MASTER_BLOCK_SIZE` (1,000,000-byte) blocks via an `ErrorKind::Interrupted`-safe read loop instead of buffering through `BufWriter`, making compressed output byte-identical regardless of `Read::read()` chunking (#8).
+- CI: replace deprecated `AtomicUsize::fetch_update` with a `compare_exchange_weak` loop in `tests/stop_contract.rs`, drop the `macos-26-intel` runner, and set `CROSS_CONTAINER_OPTS: --security-opt seccomp=unconfined` for `i686` cross tests.
 - Cooperative cancellation (`Stop`) is now polled inside the expensive LZ77
   work instead of only once per squeeze iteration. Previously a single
   `get_best_lengths` dynamic-programming pass over a ~1 MiB block ran with no

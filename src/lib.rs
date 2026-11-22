@@ -271,6 +271,33 @@ pub enum Format {
     Deflate,
 }
 
+#[cfg(feature = "std")]
+fn feed_master_blocks<R: std::io::Read, E: Write>(
+    mut in_data: R,
+    encoder: &mut E,
+) -> Result<(), Error> {
+    let mut buf = vec![0u8; crate::util::ZOPFLI_MASTER_BLOCK_SIZE];
+    loop {
+        let mut filled = 0;
+        while filled < buf.len() {
+            match in_data.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        if filled == 0 {
+            break;
+        }
+        encoder.write_all(&buf[..filled])?;
+        if filled < buf.len() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// Compresses data from a source with the Zopfli algorithm, using the specified
 /// options, and writes the result to a sink in the defined output format.
 ///
@@ -288,26 +315,26 @@ pub enum Format {
 pub fn compress<R: std::io::Read, W: Write>(
     options: Options,
     output_format: Format,
-    mut in_data: R,
+    in_data: R,
     out: W,
 ) -> Result<(), Error> {
     match output_format {
         #[cfg(feature = "gzip")]
         Format::Gzip => {
-            let mut encoder = GzipEncoder::new_buffered(options, out)?;
-            std::io::copy(&mut in_data, &mut encoder)?;
-            encoder.into_inner()?.finish().map(|_| ())
+            let mut encoder = GzipEncoder::new(options, out)?;
+            feed_master_blocks(in_data, &mut encoder)?;
+            encoder.finish().map(|_| ())
         }
         #[cfg(feature = "zlib")]
         Format::Zlib => {
-            let mut encoder = ZlibEncoder::new_buffered(options, out)?;
-            std::io::copy(&mut in_data, &mut encoder)?;
-            encoder.into_inner()?.finish().map(|_| ())
+            let mut encoder = ZlibEncoder::new(options, out)?;
+            feed_master_blocks(in_data, &mut encoder)?;
+            encoder.finish().map(|_| ())
         }
         Format::Deflate => {
-            let mut encoder = DeflateEncoder::new_buffered(options, out);
-            std::io::copy(&mut in_data, &mut encoder)?;
-            encoder.into_inner()?.finish().map(|_| ())
+            let mut encoder = DeflateEncoder::new(options, out);
+            feed_master_blocks(in_data, &mut encoder)?;
+            encoder.finish().map(|_| ())
         }
     }
 }
@@ -580,5 +607,179 @@ mod test {
         let decompressed = inflate::decompress_to_vec(&compressed)
             .expect("Output of capped pathological options must be valid DEFLATE");
         assert_eq!(&data[..], &decompressed[..]);
+    }
+
+    struct ChunkedReader<R> {
+        inner: R,
+        chunk_size: usize,
+        interrupt_every: usize,
+        calls: usize,
+    }
+
+    impl<R> ChunkedReader<R> {
+        const fn new(inner: R, chunk_size: usize, interrupt_every: usize) -> Self {
+            Self {
+                inner,
+                chunk_size,
+                interrupt_every,
+                calls: 0,
+            }
+        }
+    }
+
+    impl<R: io::Read> io::Read for ChunkedReader<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.interrupt_every > 0 && self.calls.is_multiple_of(self.interrupt_every) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "simulated EINTR",
+                ));
+            }
+            let limit = buf.len().min(self.chunk_size);
+            self.inner.read(&mut buf[..limit])
+        }
+    }
+
+    #[test]
+    fn compress_output_independent_of_read_chunking() {
+        // > 1.2 MiB (1_258_291 B) of compressible structured data crossing
+        // ZOPFLI_MASTER_BLOCK_SIZE (1_000_000). Varied runs let Zopfli's
+        // Hash2/RLE match path finish quickly in unoptimized debug builds
+        // while still exercising dynamic Huffman trees and block splitting
+        // across the 1 MB master-block boundary.
+        const LEN: usize = 1_260_000;
+        let mut data = Vec::with_capacity(LEN);
+        let mut block_idx: u32 = 0;
+        while data.len() < LEN {
+            let mut state = block_idx
+                .wrapping_mul(0x9E37_79B9)
+                .wrapping_add(0x1234_5678);
+            for _ in 0..16 {
+                if data.len() == LEN {
+                    break;
+                }
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                data.push((state >> 24) as u8);
+            }
+            // Run >= 4 * ZOPFLI_MAX_MATCH lets squeeze's RLE shortcut skip
+            // full DP walks in debug builds while varied run bytes keep
+            // block splitting and Huffman trees sensitive to master blocks.
+            let run_byte = (block_idx % 251) as u8;
+            let run_len = (LEN - data.len()).min(4080);
+            data.resize(data.len() + run_len, run_byte);
+            block_idx += 1;
+        }
+
+        let options = Options {
+            iteration_count: NonZeroU64::new(1).unwrap(),
+            ..Options::default()
+        };
+
+        let formats: &[Format] = &[
+            #[cfg(feature = "gzip")]
+            Format::Gzip,
+            #[cfg(feature = "zlib")]
+            Format::Zlib,
+            Format::Deflate,
+        ];
+
+        for &format in formats {
+            let mut ref_slice = Vec::new();
+            compress(options, format, data.as_slice(), &mut ref_slice).unwrap();
+            assert!(
+                ref_slice.len() < data.len() / 2,
+                "expected compressible test fixture, got {} / {} bytes",
+                ref_slice.len(),
+                data.len()
+            );
+
+            let mut ref_cursor = Vec::new();
+            compress(options, format, io::Cursor::new(&data), &mut ref_cursor).unwrap();
+            assert_eq!(
+                ref_slice, ref_cursor,
+                "slice and Cursor differed for {format:?}"
+            );
+
+            for &(chunk_size, interrupt_every) in
+                &[(7, 0), (4096, 0), (4096, 29), (8192, 0), (131_071, 0)]
+            {
+                let reader = ChunkedReader::new(data.as_slice(), chunk_size, interrupt_every);
+                let mut chunked = Vec::new();
+                compress(options, format, reader, &mut chunked).unwrap();
+                assert_eq!(
+                    ref_slice, chunked,
+                    "chunk_size={chunk_size}, interrupt_every={interrupt_every} differed for {format:?}"
+                );
+            }
+
+            assert_roundtrip(format, &ref_slice, &data);
+        }
+    }
+
+    fn assert_roundtrip(format: Format, compressed: &[u8], expected: &[u8]) {
+        match format {
+            #[cfg(feature = "gzip")]
+            Format::Gzip => {
+                let mut decompressed = vec![0u8; expected.len()];
+                let outcome = zenflate::Decompressor::new()
+                    .gzip_decompress(compressed, &mut decompressed, Unstoppable)
+                    .unwrap();
+                assert_eq!(&decompressed[..outcome.output_written], expected);
+            }
+            #[cfg(feature = "zlib")]
+            Format::Zlib => {
+                let decompressed = inflate::decompress_to_vec_zlib(compressed).unwrap();
+                assert_eq!(decompressed, expected);
+            }
+            Format::Deflate => {
+                let decompressed = inflate::decompress_to_vec(compressed).unwrap();
+                assert_eq!(decompressed, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn compress_empty_and_exact_master_block_boundary() {
+        let options = Options {
+            iteration_count: NonZeroU64::new(1).unwrap(),
+            ..Options::default()
+        };
+        let formats: &[Format] = &[
+            #[cfg(feature = "gzip")]
+            Format::Gzip,
+            #[cfg(feature = "zlib")]
+            Format::Zlib,
+            Format::Deflate,
+        ];
+
+        // 0 bytes, exact ZOPFLI_MASTER_BLOCK_SIZE (1_000_000), and 1_000_001 bytes.
+        let mut boundary_data = vec![b'A'; 500_000];
+        boundary_data.resize(crate::util::ZOPFLI_MASTER_BLOCK_SIZE, b'B');
+        boundary_data.push(b'C');
+
+        for &len in &[
+            0usize,
+            crate::util::ZOPFLI_MASTER_BLOCK_SIZE,
+            crate::util::ZOPFLI_MASTER_BLOCK_SIZE + 1,
+        ] {
+            let input = &boundary_data[..len];
+            for &format in formats {
+                let mut ref_out = Vec::new();
+                compress(options, format, input, &mut ref_out).unwrap();
+
+                let mut chunked_out = Vec::new();
+                let reader = ChunkedReader::new(input, 131_071, 3);
+                compress(options, format, reader, &mut chunked_out).unwrap();
+
+                assert_eq!(
+                    ref_out, chunked_out,
+                    "boundary len={len} differed for {format:?}"
+                );
+                assert_roundtrip(format, &ref_out, input);
+            }
+        }
     }
 }
