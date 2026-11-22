@@ -9,7 +9,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-zenutils-apidoc = "0.1.0"
+zenutils-apidoc = "0.1.1"
 
 # Standalone workspace root. The parent manifest is a single-package root
 # with no [workspace] table (so no `exclude` entry exists up there); this
