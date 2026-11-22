@@ -9,14 +9,20 @@ struct StopAfter {
 }
 impl Stop for StopAfter {
     fn check(&self) -> Result<(), StopReason> {
-        if self
-            .remaining
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
-            .is_err()
-        {
-            Err(self.reason)
-        } else {
-            Ok(())
+        let mut cur = self.remaining.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = cur.checked_sub(1) else {
+                return Err(self.reason);
+            };
+            match self.remaining.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(observed) => cur = observed,
+            }
         }
     }
 }

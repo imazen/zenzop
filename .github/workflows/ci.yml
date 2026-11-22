@@ -34,8 +34,6 @@ jobs:
             os: ubuntu-24.04-arm
           - name: macOS arm64
             os: macos-latest
-          - name: macOS x64
-            os: macos-26-intel
           - name: Windows x64
             os: windows-latest
           - name: Windows arm64
@@ -65,6 +63,8 @@ jobs:
         with:
           key: cross-i686
       - name: Run tests (i686)
+        env:
+          CROSS_CONTAINER_OPTS: --security-opt seccomp=unconfined
         run: cross test --target i686-unknown-linux-gnu --release
 
   wasm:
